@@ -93,6 +93,29 @@
   margin-bottom: 0.75rem;
 }
 
+.jobPresetRow {
+  display: block;
+  margin-bottom: 0.35rem;
+}
+
+.localOnlyNote {
+  margin-bottom: 0.8rem;
+  color: #44545e;
+  font-size: 0.95rem;
+}
+
+.jobActionsRow {
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: 1fr;
+}
+
+.secondaryActionBtn {
+  min-height: 38px;
+  padding: 0.4rem 0.75rem;
+  font-weight: 600;
+}
+
 .primaryBtn {
   background: #0a6975;
   color: #ffffff;
@@ -260,6 +283,10 @@
   }
 
   .runFields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .jobActionsRow {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

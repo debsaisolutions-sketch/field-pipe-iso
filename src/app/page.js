@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import styles from "./page.module.css";
 
 const PIPE_SIZES = ['1/2"', '3/4"', '1"', '1-1/4"', '1-1/2"', '2"', '3"', '4"', '6"'];
@@ -35,6 +35,8 @@ const DIRECTION_VECTOR = {
   up: [0, 0, 1],
   down: [0, 0, -1],
 };
+
+const SAVED_JOBS_STORAGE_KEY = "field-pipe-iso.saved-jobs.v1";
 
 // Estimated takeoff table for MVP only.
 // TODO: verify these with manufacturer and project spec data before production.
@@ -133,6 +135,28 @@ export default function Home() {
     EMPTY_FITTING_COUNTS
   );
   const [overallMaterialTakeoff, setOverallMaterialTakeoff] = useState(0);
+  const [savedJobs, setSavedJobs] = useState([]);
+  const [selectedSavedJobId, setSelectedSavedJobId] = useState("");
+
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(SAVED_JOBS_STORAGE_KEY);
+      if (!stored) return;
+      const parsed = JSON.parse(stored);
+      if (!Array.isArray(parsed)) return;
+      const normalized = parsed
+        .map((item) => ({
+          id: String(item.id || ""),
+          name: String(item.name || ""),
+          customerLocation: String(item.customerLocation || ""),
+          notes: String(item.notes || ""),
+        }))
+        .filter((item) => item.id);
+      setSavedJobs(normalized);
+    } catch {
+      setSavedJobs([]);
+    }
+  }, []);
 
   const segmentRows = useMemo(() => {
     return segments.map((segment) => {
@@ -267,6 +291,53 @@ export default function Home() {
     setJob((prev) => ({ ...prev, [field]: value }));
   }
 
+  function persistSavedJobs(nextSavedJobs) {
+    setSavedJobs(nextSavedJobs);
+    window.localStorage.setItem(
+      SAVED_JOBS_STORAGE_KEY,
+      JSON.stringify(nextSavedJobs)
+    );
+  }
+
+  function saveCurrentJob() {
+    const nextSavedJob = {
+      id: String(Date.now()),
+      name: job.name.trim(),
+      customerLocation: job.customerLocation.trim(),
+      notes: job.notes.trim(),
+    };
+
+    if (!nextSavedJob.name && !nextSavedJob.customerLocation && !nextSavedJob.notes) {
+      return;
+    }
+
+    persistSavedJobs([nextSavedJob, ...savedJobs]);
+    setSelectedSavedJobId(nextSavedJob.id);
+  }
+
+  function applySavedJob(savedJobId) {
+    setSelectedSavedJobId(savedJobId);
+    const chosen = savedJobs.find((savedJob) => savedJob.id === savedJobId);
+    if (!chosen) return;
+
+    setJob((prev) => ({
+      ...prev,
+      name: chosen.name,
+      customerLocation: chosen.customerLocation,
+      notes: chosen.notes,
+    }));
+  }
+
+  function clearJobInfo() {
+    setSelectedSavedJobId("");
+    setJob((prev) => ({
+      ...prev,
+      name: "",
+      customerLocation: "",
+      notes: "",
+    }));
+  }
+
   function addPipeRun() {
     setSegments((prev) => [
       ...prev,
@@ -376,6 +447,24 @@ export default function Home() {
       <main className={styles.mainGrid}>
         <section className={styles.panel}>
           <h2>Job Info</h2>
+          <div className={styles.jobPresetRow}>
+            <label className={styles.inlineLabel}>
+              Saved Jobs
+              <select
+                value={selectedSavedJobId}
+                onChange={(event) => applySavedJob(event.target.value)}
+              >
+                <option value="">Select a saved job</option>
+                {savedJobs.map((savedJob) => (
+                  <option key={savedJob.id} value={savedJob.id}>
+                    {savedJob.name || "Untitled Job"}
+                    {savedJob.customerLocation ? ` - ${savedJob.customerLocation}` : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <p className={styles.localOnlyNote}>Saved jobs are stored on this device only.</p>
           <div className={styles.formGrid}>
             <label>
               Job Name
@@ -409,6 +498,18 @@ export default function Home() {
                 placeholder="Scope notes, crew notes, install assumptions..."
               />
             </label>
+            <div className={`${styles.fullWidth} ${styles.jobActionsRow}`}>
+              <button
+                className={styles.secondaryActionBtn}
+                type="button"
+                onClick={saveCurrentJob}
+              >
+                Save Current Job
+              </button>
+              <button className={styles.secondaryActionBtn} type="button" onClick={clearJobInfo}>
+                Clear Job Info
+              </button>
+            </div>
           </div>
         </section>
 
