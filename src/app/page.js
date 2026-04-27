@@ -537,7 +537,8 @@ export default function Home() {
       </header>
 
       <main className={styles.mainGrid}>
-        <section className={styles.panel}>
+        <div className={styles.leftColumn}>
+        <section className={`${styles.panel} ${styles.jobPanel}`}>
           <h2>Job Info</h2>
           <div className={styles.jobPresetRow}>
             <label className={styles.inlineLabel}>
@@ -605,7 +606,19 @@ export default function Home() {
           </div>
         </section>
 
-        <section className={styles.panel}>
+        <section className={`${styles.panel} ${styles.fittingsPanel}`}>
+          <h2>Fittings</h2>
+          <p className={styles.helpText}>Quick-add extra fittings not already assigned to run starts/ends.</p>
+          <div className={styles.fitButtons}>
+            {FITTING_TYPES.map((fitting) => (
+              <button key={fitting} onClick={() => addFittingQuick(fitting)} type="button">
+                {fitting === "90 elbow" ? "Add 90" : fitting === "45 elbow" ? "Add 45" : `Add ${fitting}`}
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section className={`${styles.panel} ${styles.pipeRunsPanel}`}>
           <h2>Pipe & Runs</h2>
           <label className={styles.inlineLabel}>
             Pipe Size
@@ -703,20 +716,10 @@ export default function Home() {
             ))}
           </div>
         </section>
+        </div>
 
-        <section className={styles.panel}>
-          <h2>Fittings</h2>
-          <p className={styles.helpText}>Quick-add extra fittings not already assigned to run starts/ends.</p>
-          <div className={styles.fitButtons}>
-            {FITTING_TYPES.map((fitting) => (
-              <button key={fitting} onClick={() => addFittingQuick(fitting)} type="button">
-                {fitting === "90 elbow" ? "Add 90" : fitting === "45 elbow" ? "Add 45" : `Add ${fitting}`}
-              </button>
-            ))}
-          </div>
-        </section>
-
-        <section className={styles.panel}>
+        <div className={styles.rightColumn}>
+        <section className={`${styles.panel} ${styles.overallPanel}`}>
           <h2>Overall Length Calculator</h2>
           <p className={styles.helpText}>
             Enter total end-to-end length, choose units and pipe size, then add fitting counts.
@@ -994,6 +997,7 @@ export default function Home() {
             </tbody>
           </table>
         </section>
+        </div>
       </main>
     </div>
   );

@@ -33,6 +33,11 @@
   grid-template-columns: 1fr;
 }
 
+.leftColumn,
+.rightColumn {
+  display: contents;
+}
+
 .panel {
   border: 1px solid #c9dada;
   border-radius: 8px;
@@ -43,6 +48,30 @@
 .panel h2 {
   font-size: 1.4rem;
   margin-bottom: 0.8rem;
+}
+
+.jobPanel {
+  order: 1;
+}
+
+.overallPanel {
+  order: 2;
+}
+
+.fittingsPanel {
+  order: 3;
+}
+
+.pipeRunsPanel {
+  order: 4;
+}
+
+.drawingPanel {
+  order: 5;
+}
+
+.materialPanel {
+  order: 6;
 }
 
 .formGrid {
@@ -289,16 +318,9 @@
 
 @media (min-width: 820px) {
   .mainGrid {
-    grid-template-columns: repeat(12, 1fr);
-  }
-
-  .panel {
-    grid-column: span 6;
-  }
-
-  .drawingPanel,
-  .materialPanel {
-    grid-column: span 12;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 1rem;
+    row-gap: 0;
   }
 
   .formGrid {
@@ -311,6 +333,37 @@
 
   .jobActionsRow {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .leftColumn,
+  .rightColumn {
+    display: grid;
+    gap: 0.55rem;
+    align-content: start;
+  }
+
+  .jobPanel {
+    order: 1;
+  }
+
+  .overallPanel {
+    order: 2;
+  }
+
+  .fittingsPanel {
+    order: 3;
+  }
+
+  .drawingPanel {
+    order: 4;
+  }
+
+  .pipeRunsPanel {
+    order: 5;
+  }
+
+  .materialPanel {
+    order: 6;
   }
 }
 
