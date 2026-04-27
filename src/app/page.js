@@ -620,6 +620,10 @@ export default function Home() {
 
         <section className={`${styles.panel} ${styles.pipeRunsPanel}`}>
           <h2>Pipe & Runs</h2>
+          <p className={styles.helpText}>
+            Use this section if you already know each run length and direction. You can enter
+            runs here manually.
+          </p>
           <label className={styles.inlineLabel}>
             Pipe Size
             <select value={pipeSize} onChange={(event) => setPipeSize(event.target.value)}>
@@ -630,10 +634,6 @@ export default function Home() {
               ))}
             </select>
           </label>
-
-          <button className={styles.primaryBtn} onClick={addPipeRun} type="button">
-            Add Pipe Run
-          </button>
           <p className={styles.helperNote}>
             Tip: Add each straight section as a run. Use Direction to show the next turn.
             Example: Run 1 East + 90 elbow, Run 2 North.
@@ -715,6 +715,12 @@ export default function Home() {
               </article>
             ))}
           </div>
+          <p className={styles.helperNote}>
+            The drawing updates automatically as you add or edit runs.
+          </p>
+          <button className={styles.primaryBtn} onClick={addPipeRun} type="button">
+            Add Pipe Run
+          </button>
         </section>
         </div>
 
@@ -722,7 +728,9 @@ export default function Home() {
         <section className={`${styles.panel} ${styles.overallPanel}`}>
           <h2>Overall Length Calculator</h2>
           <p className={styles.helpText}>
-            Enter total end-to-end length, choose units and pipe size, then add fitting counts.
+            Use this section if you know the total overall length first. Add run breakdowns here,
+            then click Build Drawing From Overall Length to fill the Pipe & Runs section
+            automatically.
           </p>
 
           <div className={styles.runFields}>
