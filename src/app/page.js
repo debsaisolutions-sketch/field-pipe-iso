@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import styles from "./page.module.css";
 
 const PIPE_SIZES = ['1/2"', '3/4"', '1"', '1-1/4"', '1-1/2"', '2"', '3"', '4"', '6"'];
@@ -37,6 +37,28 @@ const DIRECTION_VECTOR = {
 };
 
 const SAVED_JOBS_STORAGE_KEY = "field-pipe-iso.saved-jobs.v1";
+
+function toInches(lengthValue, unit) {
+  const length = Number(lengthValue) || 0;
+  return unit === "feet" ? length * 12 : length;
+}
+
+function buildKnownLengthFromCalculatorRun(lengthValue, unit) {
+  if (unit === "feet") {
+    return `${toInches(lengthValue, unit)}`;
+  }
+  return String(lengthValue ?? "");
+}
+
+function formatRunLength(value) {
+  const numeric = Number(value) || 0;
+  return Number.isInteger(numeric) ? `${numeric}` : numeric.toFixed(2);
+}
+
+function formatDirectionLabel(directionValue) {
+  if (!directionValue) return "East";
+  return directionValue[0].toUpperCase() + directionValue.slice(1);
+}
 
 // Estimated takeoff table for MVP only.
 // TODO: verify these with manufacturer and project spec data before production.
@@ -135,6 +157,16 @@ export default function Home() {
     EMPTY_FITTING_COUNTS
   );
   const [overallMaterialTakeoff, setOverallMaterialTakeoff] = useState(0);
+  const nextCalculatorRunId = useRef(2);
+  const [calculatorRuns, setCalculatorRuns] = useState([
+    {
+      id: "run-1",
+      label: "Run 1",
+      length: "",
+      unit: "inches",
+      direction: "east",
+    },
+  ]);
   const [savedJobs, setSavedJobs] = useState([]);
   const [selectedSavedJobId, setSelectedSavedJobId] = useState("");
 
@@ -224,9 +256,7 @@ export default function Home() {
   ]);
 
   const overallLengthCalc = useMemo(() => {
-    const enteredLength = Number(overallLength) || 0;
-    const overallInches =
-      overallUnit === "feet" ? enteredLength * 12 : enteredLength;
+    const overallInches = toInches(overallLength, overallUnit);
 
     const totalTakeoff = FITTING_TYPES.reduce((sum, fitting) => {
       const count = Number(overallFittings[fitting]) || 0;
@@ -242,6 +272,20 @@ export default function Home() {
       isNonPositive: straightCutLength <= 0,
     };
   }, [overallLength, overallUnit, overallPipeSize, overallFittings]);
+
+  const calculatorRunTotals = useMemo(() => {
+    const totalInches = calculatorRuns.reduce(
+      (sum, run) => sum + toInches(run.length, run.unit),
+      0
+    );
+    const differenceInches = totalInches - overallLengthCalc.overallInches;
+
+    return {
+      totalInches,
+      differenceInches,
+      matchesOverall: Math.abs(differenceInches) < 0.01,
+    };
+  }, [calculatorRuns, overallLengthCalc.overallInches]);
 
   const drawingModel = useMemo(() => {
     let points3d = buildOverallSketchPoints(overallSketchMode, overallSketchLength);
@@ -364,16 +408,50 @@ export default function Home() {
     );
   }
 
+  function addCalculatorRun() {
+    const runId = `run-${nextCalculatorRunId.current}`;
+    nextCalculatorRunId.current += 1;
+
+    setCalculatorRuns((prev) => [
+      ...prev,
+      {
+        id: runId,
+        label: `Run ${prev.length + 1}`,
+        length: "",
+        unit: "inches",
+        direction: "east",
+      },
+    ]);
+  }
+
+  function removeCalculatorRun(id) {
+    setCalculatorRuns((prev) => prev.filter((run) => run.id !== id));
+  }
+
+  function updateCalculatorRun(id, field, value) {
+    setCalculatorRuns((prev) =>
+      prev.map((run) => (run.id === id ? { ...run, [field]: value } : run))
+    );
+  }
+
   function addFittingQuick(type) {
     setMaterialSource("manual");
     setExtraFittings((prev) => ({ ...prev, [type]: (prev[type] || 0) + 1 }));
   }
 
   function updateOverallFittingCount(fitting, value) {
-    const parsed = Number(value);
+    if (value === "") {
+      setOverallFittings((prev) => ({ ...prev, [fitting]: "" }));
+      return;
+    }
+
+    if (!/^\d+$/.test(value)) {
+      return;
+    }
+
     setOverallFittings((prev) => ({
       ...prev,
-      [fitting]: Number.isFinite(parsed) ? Math.max(0, parsed) : 0,
+      [fitting]: value,
     }));
   }
 
@@ -387,38 +465,52 @@ export default function Home() {
     const ninetyCount = Number(overallFittings["90 elbow"]) || 0;
 
     setPipeSize(overallPipeSize);
-    setSegments((prev) => {
-      if (prev.length === 0) {
-        return [
-          {
-            id: Date.now(),
-            label: "Run 1",
-            knownLength: straightCutLengthString,
-            direction: "east",
-            startFitting: "none",
-            endFitting: "none",
-          },
-        ];
-      }
+    const runsWithLength = calculatorRuns.filter((run) => Number(run.length) > 0);
 
-      return prev.map((segment, index) =>
-        index === 0
-          ? {
-              ...segment,
+    if (runsWithLength.length > 0) {
+      setSegments(
+        runsWithLength.map((run, index) => ({
+          id: Date.now() + index,
+          label: run.label || `Run ${index + 1}`,
+          knownLength: buildKnownLengthFromCalculatorRun(run.length, run.unit),
+          direction: run.direction || "east",
+          startFitting: "none",
+          endFitting: "none",
+        }))
+      );
+    } else {
+      setSegments((prev) => {
+        if (prev.length === 0) {
+          return [
+            {
+              id: Date.now(),
+              label: "Run 1",
               knownLength: straightCutLengthString,
+              direction: "east",
               startFitting: "none",
               endFitting: "none",
-            }
-          : segment
-      );
-    });
+            },
+          ];
+        }
+
+        return prev.map((segment, index) =>
+          index === 0
+            ? {
+                ...segment,
+                knownLength: straightCutLengthString,
+                startFitting: "none",
+                endFitting: "none",
+              }
+            : segment
+        );
+      });
+    }
 
     const exactOverallFittings = Object.fromEntries(
       FITTING_TYPES.map((fitting) => [fitting, Number(overallFittings[fitting]) || 0])
     );
     setOverallMaterialFittings(exactOverallFittings);
     setOverallMaterialTakeoff(overallLengthCalc.totalTakeoff);
-    setExtraFittings(exactOverallFittings);
     setMaterialSource("overall");
 
     if (ninetyCount === 1) {
@@ -529,6 +621,10 @@ export default function Home() {
           <button className={styles.primaryBtn} onClick={addPipeRun} type="button">
             Add Pipe Run
           </button>
+          <p className={styles.helperNote}>
+            Tip: Add each straight section as a run. Use Direction to show the next turn.
+            Example: Run 1 East + 90 elbow, Run 2 North.
+          </p>
 
           <div className={styles.runList}>
             {segmentRows.map((segment, index) => (
@@ -664,6 +760,92 @@ export default function Home() {
 
           <div className={styles.runList}>
             <article className={styles.runCard}>
+              <div className={styles.runHeader}>
+                <strong>Run Breakdown</strong>
+              </div>
+              <div className={styles.runList}>
+                {calculatorRuns.map((run, index) => (
+                  <div key={run.id} className={styles.calcRunRow}>
+                    <div className={styles.runFields}>
+                      <label>
+                        Label
+                        <input
+                          value={run.label}
+                          onChange={(event) =>
+                            updateCalculatorRun(run.id, "label", event.target.value)
+                          }
+                          placeholder={`Run ${index + 1}`}
+                        />
+                      </label>
+                      <label>
+                        Length
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          value={run.length}
+                          onChange={(event) =>
+                            updateCalculatorRun(run.id, "length", event.target.value)
+                          }
+                        />
+                      </label>
+                      <label>
+                        Unit
+                        <select
+                          value={run.unit}
+                          onChange={(event) =>
+                            updateCalculatorRun(run.id, "unit", event.target.value)
+                          }
+                        >
+                          <option value="inches">Inches</option>
+                          <option value="feet">Feet</option>
+                        </select>
+                      </label>
+                      <label>
+                        Direction
+                        <select
+                          value={run.direction}
+                          onChange={(event) =>
+                            updateCalculatorRun(run.id, "direction", event.target.value)
+                          }
+                        >
+                          {DIRECTION_OPTIONS.map((direction) => (
+                            <option key={direction.value} value={direction.value}>
+                              {direction.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => removeCalculatorRun(run.id)}
+                      disabled={calculatorRuns.length === 1}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <div className={styles.materialSummary}>
+                <p>Run Total: {calculatorRunTotals.totalInches.toFixed(2)} in</p>
+                {calculatorRunTotals.matchesOverall ? (
+                  <p>Run total matches overall length.</p>
+                ) : (
+                  <p>
+                    Difference from overall length:{" "}
+                    {Math.abs(calculatorRunTotals.differenceInches).toFixed(2)} in{" "}
+                    {calculatorRunTotals.differenceInches > 0 ? "(over)" : "(under)"}
+                  </p>
+                )}
+              </div>
+              <button type="button" onClick={addCalculatorRun}>
+                Add Calculator Run
+              </button>
+            </article>
+          </div>
+
+          <div className={styles.runList}>
+            <article className={styles.runCard}>
               <strong>Fitting Counts</strong>
               <div className={styles.runFields}>
                 {FITTING_TYPES.map((fitting) => (
@@ -746,11 +928,32 @@ export default function Home() {
               <rect x="0" y="0" width={drawingModel.width} height={drawingModel.height} />
               {drawingModel.points.slice(0, -1).map((point, index) => {
                 const next = drawingModel.points[index + 1];
+                const midX = (point[0] + next[0]) / 2;
+                const midY = (point[1] + next[1]) / 2;
+                const dx = next[0] - point[0];
+                const dy = next[1] - point[1];
+                const magnitude = Math.hypot(dx, dy) || 1;
+                const offset = 14;
+                const labelX = midX + (-dy / magnitude) * offset;
+                const labelY = midY + (dx / magnitude) * offset;
+                const rawAngle = (Math.atan2(dy, dx) * 180) / Math.PI;
+                const readableAngle =
+                  rawAngle > 90 || rawAngle < -90 ? rawAngle + 180 : rawAngle;
+                const segment = segmentRows[index];
+                const runText = segment?.label || `Run ${index + 1}`;
+                const lengthText = `${formatRunLength(segment?.known)} in`;
+                const directionText = formatDirectionLabel(segment?.direction);
                 return (
                   <g key={`seg-${index}`}>
                     <line x1={point[0]} y1={point[1]} x2={next[0]} y2={next[1]} />
-                    <text x={(point[0] + next[0]) / 2 + 6} y={(point[1] + next[1]) / 2 - 6}>
-                      {segmentRows[index]?.label || `Run ${index + 1}`}
+                    <text
+                      x={labelX}
+                      y={labelY}
+                      transform={`rotate(${readableAngle} ${labelX} ${labelY})`}
+                      textAnchor="middle"
+                      dominantBaseline="middle"
+                    >
+                      {`${runText} • ${lengthText} • ${directionText}`}
                     </text>
                   </g>
                 );
