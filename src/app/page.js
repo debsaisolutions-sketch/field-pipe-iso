@@ -37,6 +37,17 @@ const DIRECTION_VECTOR = {
 };
 
 const SAVED_JOBS_STORAGE_KEY = "field-pipe-iso.saved-jobs.v1";
+const TAKEOFF_SETTINGS_STORAGE_KEY = "field-pipe-iso.takeoff-settings.v1";
+
+const FITTING_COLUMN_LABELS = {
+  "90 elbow": "90°",
+  "45 elbow": "45°",
+  tee: "Tee",
+  reducer: "Red.",
+  coupling: "Cplg",
+  flange: "Flg",
+  valve: "Valve",
+};
 
 function toInches(lengthValue, unit) {
   const length = Number(lengthValue) || 0;
@@ -60,9 +71,8 @@ function formatDirectionLabel(directionValue) {
   return directionValue[0].toUpperCase() + directionValue.slice(1);
 }
 
-// Estimated takeoff table for MVP only.
-// TODO: verify these with manufacturer and project spec data before production.
-const TAKEOFF_TABLE = {
+// Default takeoff table — starter estimates only; users can override in Takeoff Settings.
+const DEFAULT_TAKEOFF_TABLE = {
   '1/2"': { "90 elbow": 0.75, "45 elbow": 0.5, tee: 0.75, reducer: 0.25, coupling: 0.1, flange: 0.2, valve: 0.4 },
   '3/4"': { "90 elbow": 1, "45 elbow": 0.75, tee: 1, reducer: 0.25, coupling: 0.15, flange: 0.3, valve: 0.5 },
   '1"': { "90 elbow": 1.25, "45 elbow": 0.85, tee: 1.25, reducer: 0.3, coupling: 0.2, flange: 0.4, valve: 0.6 },
@@ -74,9 +84,36 @@ const TAKEOFF_TABLE = {
   '6"': { "90 elbow": 6.4, "45 elbow": 4.2, tee: 6.4, reducer: 1.3, coupling: 0.8, flange: 1.9, valve: 3 },
 };
 
-function getTakeoff(size, fitting) {
+function cloneDefaultTakeoffTable() {
+  return Object.fromEntries(
+    PIPE_SIZES.map((size) => [
+      size,
+      Object.fromEntries(
+        FITTING_TYPES.map((fitting) => [fitting, DEFAULT_TAKEOFF_TABLE[size][fitting]])
+      ),
+    ])
+  );
+}
+
+function normalizeStoredTakeoffTable(raw) {
+  const out = cloneDefaultTakeoffTable();
+  if (!raw || typeof raw !== "object") return out;
+  for (const size of PIPE_SIZES) {
+    if (!raw[size] || typeof raw[size] !== "object") continue;
+    for (const fitting of FITTING_TYPES) {
+      const v = Number(raw[size][fitting]);
+      if (Number.isFinite(v) && v >= 0) {
+        out[size][fitting] = v;
+      }
+    }
+  }
+  return out;
+}
+
+function getTakeoff(table, size, fitting) {
   if (!fitting || fitting === "none") return 0;
-  return TAKEOFF_TABLE[size]?.[fitting] ?? 0;
+  const v = table[size]?.[fitting];
+  return Number.isFinite(v) ? v : 0;
 }
 
 function rotateVector([x, y, z], turns) {
@@ -156,7 +193,7 @@ export default function Home() {
   const [overallMaterialFittings, setOverallMaterialFittings] = useState(
     EMPTY_FITTING_COUNTS
   );
-  const [overallMaterialTakeoff, setOverallMaterialTakeoff] = useState(0);
+  const [takeoffTable, setTakeoffTable] = useState(() => cloneDefaultTakeoffTable());
   const nextCalculatorRunId = useRef(2);
   const [calculatorRuns, setCalculatorRuns] = useState([
     {
@@ -190,11 +227,22 @@ export default function Home() {
     }
   }, []);
 
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(TAKEOFF_SETTINGS_STORAGE_KEY);
+      if (!stored) return;
+      const parsed = JSON.parse(stored);
+      setTakeoffTable(normalizeStoredTakeoffTable(parsed));
+    } catch {
+      // keep defaults
+    }
+  }, []);
+
   const segmentRows = useMemo(() => {
     return segments.map((segment) => {
       const known = Number(segment.knownLength) || 0;
-      const startTakeoff = getTakeoff(pipeSize, segment.startFitting);
-      const endTakeoff = getTakeoff(pipeSize, segment.endFitting);
+      const startTakeoff = getTakeoff(takeoffTable, pipeSize, segment.startFitting);
+      const endTakeoff = getTakeoff(takeoffTable, pipeSize, segment.endFitting);
       const totalTakeoff = startTakeoff + endTakeoff;
       const cutLength = Math.max(known - totalTakeoff, 0);
       return {
@@ -206,7 +254,7 @@ export default function Home() {
         cutLength,
       };
     });
-  }, [segments, pipeSize]);
+  }, [segments, pipeSize, takeoffTable]);
 
   const materialTotals = useMemo(() => {
     if (materialSource === "overall") {
@@ -215,12 +263,16 @@ export default function Home() {
       );
       const totalKnownLength = segmentRows.reduce((sum, segment) => sum + segment.known, 0);
       const totalCutLength = segmentRows.reduce((sum, segment) => sum + segment.cutLength, 0);
+      const totalTakeoff = FITTING_TYPES.reduce((sum, fitting) => {
+        const count = Number(overallMaterialFittings[fitting]) || 0;
+        return sum + count * getTakeoff(takeoffTable, pipeSize, fitting);
+      }, 0);
 
       return {
         fittingTotals,
         totalKnownLength,
         totalCutLength,
-        totalTakeoff: overallMaterialTakeoff,
+        totalTakeoff,
       };
     }
 
@@ -252,7 +304,8 @@ export default function Home() {
     segmentRows,
     materialSource,
     overallMaterialFittings,
-    overallMaterialTakeoff,
+    takeoffTable,
+    pipeSize,
   ]);
 
   const overallLengthCalc = useMemo(() => {
@@ -260,7 +313,7 @@ export default function Home() {
 
     const totalTakeoff = FITTING_TYPES.reduce((sum, fitting) => {
       const count = Number(overallFittings[fitting]) || 0;
-      return sum + count * getTakeoff(overallPipeSize, fitting);
+      return sum + count * getTakeoff(takeoffTable, overallPipeSize, fitting);
     }, 0);
 
     const straightCutLength = overallInches - totalTakeoff;
@@ -271,7 +324,7 @@ export default function Home() {
       straightCutLength,
       isNonPositive: straightCutLength <= 0,
     };
-  }, [overallLength, overallUnit, overallPipeSize, overallFittings]);
+  }, [overallLength, overallUnit, overallPipeSize, overallFittings, takeoffTable]);
 
   const calculatorRunTotals = useMemo(() => {
     const totalInches = calculatorRuns.reduce(
@@ -380,6 +433,33 @@ export default function Home() {
       customerLocation: "",
       notes: "",
     }));
+  }
+
+  function persistTakeoffTable(nextTable) {
+    try {
+      window.localStorage.setItem(TAKEOFF_SETTINGS_STORAGE_KEY, JSON.stringify(nextTable));
+    } catch {
+      // ignore quota / private mode
+    }
+  }
+
+  function updateTakeoffCell(size, fitting, rawValue) {
+    const num = rawValue === "" ? 0 : Number(rawValue);
+    if (!Number.isFinite(num) || num < 0) return;
+    setTakeoffTable((prev) => {
+      const next = {
+        ...prev,
+        [size]: { ...prev[size], [fitting]: num },
+      };
+      persistTakeoffTable(next);
+      return next;
+    });
+  }
+
+  function resetTakeoffsToDefaults() {
+    const next = cloneDefaultTakeoffTable();
+    setTakeoffTable(next);
+    persistTakeoffTable(next);
   }
 
   function addPipeRun() {
@@ -510,7 +590,6 @@ export default function Home() {
       FITTING_TYPES.map((fitting) => [fitting, Number(overallFittings[fitting]) || 0])
     );
     setOverallMaterialFittings(exactOverallFittings);
-    setOverallMaterialTakeoff(overallLengthCalc.totalTakeoff);
     setMaterialSource("overall");
 
     if (ninetyCount === 1) {
@@ -604,6 +683,58 @@ export default function Home() {
               </button>
             </div>
           </div>
+        </section>
+
+        <section className={`${styles.panel} ${styles.takeoffSettingsPanel}`}>
+          <h2>Takeoff Settings</h2>
+          <p className={styles.helpText}>
+            Default takeoff values are starter estimates only. Takeoff values can vary by fitting
+            type, radius, schedule, manufacturer, and company field rules. Verify and adjust these
+            values for your job.
+          </p>
+          <p className={styles.localOnlyNote}>Takeoff values are stored on this device only.</p>
+          <div className={styles.takeoffTableWrap}>
+            <table className={styles.takeoffTable}>
+              <thead>
+                <tr>
+                  <th scope="col">Size</th>
+                  {FITTING_TYPES.map((fitting) => (
+                    <th key={fitting} scope="col" title={fitting}>
+                      {FITTING_COLUMN_LABELS[fitting]}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {PIPE_SIZES.map((size) => (
+                  <tr key={size}>
+                    <th scope="row">{size}</th>
+                    {FITTING_TYPES.map((fitting) => (
+                      <td key={fitting}>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          aria-label={`${size} ${fitting} takeoff inches`}
+                          value={takeoffTable[size][fitting]}
+                          onChange={(event) =>
+                            updateTakeoffCell(size, fitting, event.target.value)
+                          }
+                        />
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <button
+            className={styles.secondaryActionBtn}
+            type="button"
+            onClick={resetTakeoffsToDefaults}
+          >
+            Reset to Defaults
+          </button>
         </section>
 
         <section className={`${styles.panel} ${styles.fittingsPanel}`}>
