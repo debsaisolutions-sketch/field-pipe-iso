@@ -611,7 +611,7 @@ export default function Home() {
   return (
     <div className={styles.page}>
       <header className={styles.header}>
-        <h1>Field Pipe Iso</h1>
+        <h1>PipeSketchPro</h1>
         <p>Simple field takeoff for pipe runs, fittings, and print-ready isometric output.</p>
       </header>
 

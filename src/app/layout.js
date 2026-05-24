@@ -12,7 +12,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata = {
-  title: "Field Pipe Iso",
+  title: "PipeSketchPro",
   description: "Field-friendly pipe isometric takeoff MVP",
 };
 
