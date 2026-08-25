@@ -1,242 +1,233 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import JobDashboard from "@/components/JobDashboard";
+import PrintDocument from "@/components/PrintDocument";
+import {
+  DIRECTION_OPTIONS,
+  DIRECTION_VECTOR,
+  EMPTY_FITTING_COUNTS,
+  FITTING_COLUMN_LABELS,
+  FITTING_TYPES,
+  PIPE_SIZES,
+} from "@/lib/constants";
+import { subscribeParentAuth } from "@/lib/authBridge";
+import {
+  deleteCloudJob,
+  duplicateCloudJob,
+  getCloudJob,
+  importLocalJobsToCloud,
+  listCloudJobs,
+  saveCloudJob,
+} from "@/lib/cloudJobs";
+import {
+  loadCloudTakeoffStandards,
+  resetCloudTakeoffToDefaults,
+  saveCloudTakeoffStandards,
+} from "@/lib/cloudTakeoff";
+import { DEFAULT_PLAN, resolveFeatures } from "@/lib/features";
+import {
+  buildKnownLengthFromCalculatorRun,
+  buildOverallSketchPoints,
+  formatDirectionLabel,
+  formatRunLength,
+  projectPoint,
+  toInches,
+} from "@/lib/geometry";
+import {
+  buildJobSnapshot,
+  createDefaultCalculatorRuns,
+  createDefaultSegment,
+  createEmptyJobMeta,
+  listItemFromRow,
+  snapshotToEditorState,
+} from "@/lib/jobSnapshot";
+import {
+  collectLocalJobsForMigration,
+  deleteLocalJobV2,
+  markJobsMigratedForUser,
+  markTakeoffMigratedForUser,
+  readLocalJobsV2,
+  readLocalTakeoffTable,
+  upsertLocalJobV2,
+  wasJobsMigratedForUser,
+  wasTakeoffMigratedForUser,
+  writeLocalTakeoffTable,
+} from "@/lib/localStorageJobs";
+import {
+  applyBridgeSession,
+  clearBridgeSession,
+  getSupabaseConfig,
+} from "@/lib/supabaseClient";
+import {
+  cloneDefaultTakeoffTable,
+  getTakeoff,
+  normalizeStoredTakeoffTable,
+} from "@/lib/takeoff";
 import styles from "./page.module.css";
 
-const PIPE_SIZES = ['1/2"', '3/4"', '1"', '1-1/4"', '1-1/2"', '2"', '3"', '4"', '6"'];
-const FITTING_TYPES = [
-  "90 elbow",
-  "45 elbow",
-  "tee",
-  "reducer",
-  "coupling",
-  "flange",
-  "valve",
-];
-
-const EMPTY_FITTING_COUNTS = Object.fromEntries(
-  FITTING_TYPES.map((fitting) => [fitting, 0])
-);
-
-const DIRECTION_OPTIONS = [
-  { value: "east", label: "East" },
-  { value: "west", label: "West" },
-  { value: "north", label: "North" },
-  { value: "south", label: "South" },
-  { value: "up", label: "Up" },
-  { value: "down", label: "Down" },
-];
-
-const DIRECTION_VECTOR = {
-  east: [1, 0, 0],
-  west: [-1, 0, 0],
-  north: [0, 1, 0],
-  south: [0, -1, 0],
-  up: [0, 0, 1],
-  down: [0, 0, -1],
-};
-
-const SAVED_JOBS_STORAGE_KEY = "field-pipe-iso.saved-jobs.v1";
-const TAKEOFF_SETTINGS_STORAGE_KEY = "field-pipe-iso.takeoff-settings.v1";
-
-const FITTING_COLUMN_LABELS = {
-  "90 elbow": "90°",
-  "45 elbow": "45°",
-  tee: "Tee",
-  reducer: "Red.",
-  coupling: "Cplg",
-  flange: "Flg",
-  valve: "Valve",
-};
-
-function toInches(lengthValue, unit) {
-  const length = Number(lengthValue) || 0;
-  return unit === "feet" ? length * 12 : length;
+function newLocalJobId() {
+  return `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function buildKnownLengthFromCalculatorRun(lengthValue, unit) {
-  if (unit === "feet") {
-    return `${toInches(lengthValue, unit)}`;
+function mergeJobLists(cloudJobs, localJobs) {
+  const byId = new Map();
+  for (const job of localJobs) {
+    byId.set(String(job.id), listItemFromRow({ ...job, _source: "local" }));
   }
-  return String(lengthValue ?? "");
-}
-
-function formatRunLength(value) {
-  const numeric = Number(value) || 0;
-  return Number.isInteger(numeric) ? `${numeric}` : numeric.toFixed(2);
-}
-
-function formatDirectionLabel(directionValue) {
-  if (!directionValue) return "East";
-  return directionValue[0].toUpperCase() + directionValue.slice(1);
-}
-
-// Default takeoff table — Blue Book elbow takeoffs (90° = pipe size × 1.5, 45° = pipe size × 0.625); users can override in Takeoff Settings.
-const DEFAULT_TAKEOFF_TABLE = {
-  '1/2"': { "90 elbow": 0.75, "45 elbow": 0.3125, tee: 0.625, reducer: 0.375, coupling: 0.375, flange: 0.75, valve: 0.75 },
-  '3/4"': { "90 elbow": 1.125, "45 elbow": 0.469, tee: 0.75, reducer: 0.4375, coupling: 0.375, flange: 0.875, valve: 0.875 },
-  '1"': { "90 elbow": 1.5, "45 elbow": 0.625, tee: 0.875, reducer: 0.5, coupling: 0.5, flange: 1, valve: 1 },
-  '1-1/4"': { "90 elbow": 1.875, "45 elbow": 0.781, tee: 1.125, reducer: 0.625, coupling: 0.75, flange: 1.25, valve: 1.25 },
-  '1-1/2"': { "90 elbow": 2.25, "45 elbow": 0.9375, tee: 1.25, reducer: 0.75, coupling: 0.875, flange: 1.375, valve: 1.375 },
-  '2"': { "90 elbow": 3, "45 elbow": 1.25, tee: 1.625, reducer: 0.875, coupling: 1, flange: 1.625, valve: 1.625 },
-  '3"': { "90 elbow": 4.5, "45 elbow": 1.875, tee: 2.25, reducer: 1.125, coupling: 1.25, flange: 2, valve: 2 },
-  '4"': { "90 elbow": 6, "45 elbow": 2.5, tee: 3, reducer: 1.5, coupling: 1.5, flange: 2.5, valve: 2.5 },
-  '6"': { "90 elbow": 9, "45 elbow": 3.75, tee: 4.5, reducer: 2, coupling: 2, flange: 3.5, valve: 3.5 },
-};
-
-function cloneDefaultTakeoffTable() {
-  return Object.fromEntries(
-    PIPE_SIZES.map((size) => [
-      size,
-      Object.fromEntries(
-        FITTING_TYPES.map((fitting) => [fitting, DEFAULT_TAKEOFF_TABLE[size][fitting]])
-      ),
-    ])
-  );
-}
-
-function normalizeStoredTakeoffTable(raw) {
-  const out = cloneDefaultTakeoffTable();
-  if (!raw || typeof raw !== "object") return out;
-  for (const size of PIPE_SIZES) {
-    if (!raw[size] || typeof raw[size] !== "object") continue;
-    for (const fitting of FITTING_TYPES) {
-      const v = Number(raw[size][fitting]);
-      if (Number.isFinite(v) && v >= 0) {
-        out[size][fitting] = v;
-      }
-    }
+  for (const job of cloudJobs) {
+    byId.set(String(job.id), job);
   }
-  return out;
-}
-
-function getTakeoff(table, size, fitting) {
-  if (!fitting || fitting === "none") return 0;
-  const v = table[size]?.[fitting];
-  return Number.isFinite(v) ? v : 0;
-}
-
-function rotateVector([x, y, z], turns) {
-  const normalized = ((turns % 4) + 4) % 4;
-  if (normalized === 0) return [x, y, z];
-  if (normalized === 1) return [-y, x, z];
-  if (normalized === 2) return [-x, -y, z];
-  return [y, -x, z];
-}
-
-function projectPoint([x, y, z], rotateTurns, flipped) {
-  const [rx, ry, rz] = rotateVector([x, y, z], rotateTurns);
-  const fx = flipped ? -rx : rx;
-  const angle = Math.PI / 6;
-  const px = (fx - ry) * Math.cos(angle);
-  const py = (fx + ry) * Math.sin(angle) - rz;
-  return [px, py];
-}
-
-function buildOverallSketchPoints(mode, straightLength) {
-  const base = Math.max(straightLength, 1);
-
-  if (mode === "l-shape") {
-    const firstLeg = Math.max(base * 0.6, 1);
-    const secondLeg = Math.max(base * 0.4, 1);
-    return [
-      [0, 0, 0],
-      [firstLeg, 0, 0],
-      [firstLeg, secondLeg, 0],
-    ];
-  }
-
-  if (mode === "u-z-shape") {
-    const firstLeg = Math.max(base * 0.45, 1);
-    const middleLeg = Math.max(base * 0.35, 1);
-    return [
-      [0, 0, 0],
-      [firstLeg, 0, 0],
-      [firstLeg, middleLeg, 0],
-      [0, middleLeg, 0],
-    ];
-  }
-
-  return null;
+  return Array.from(byId.values()).sort((a, b) => {
+    const aTime = new Date(a.updated_at || 0).getTime();
+    const bTime = new Date(b.updated_at || 0).getTime();
+    return bTime - aTime;
+  });
 }
 
 export default function Home() {
-  const [job, setJob] = useState({
-    name: "",
-    customerLocation: "",
-    date: new Date().toISOString().slice(0, 10),
-    notes: "",
-  });
+  const [job, setJob] = useState(() => createEmptyJobMeta());
+  const [currentJobId, setCurrentJobId] = useState(null);
   const [pipeSize, setPipeSize] = useState('2"');
-  const [segments, setSegments] = useState([
-    {
-      id: 1,
-      label: "Run 1",
-      knownLength: "120",
-      direction: "east",
-      startFitting: "none",
-      endFitting: "90 elbow",
-    },
-  ]);
-  const [extraFittings, setExtraFittings] = useState(
-    Object.fromEntries(FITTING_TYPES.map((fitting) => [fitting, 0]))
-  );
+  const [segments, setSegments] = useState(() => [createDefaultSegment()]);
+  const [extraFittings, setExtraFittings] = useState({ ...EMPTY_FITTING_COUNTS });
   const [rotateTurns, setRotateTurns] = useState(0);
   const [flipped, setFlipped] = useState(false);
   const [overallLength, setOverallLength] = useState("120");
   const [overallUnit, setOverallUnit] = useState("inches");
   const [overallPipeSize, setOverallPipeSize] = useState('2"');
-  const [overallFittings, setOverallFittings] = useState(EMPTY_FITTING_COUNTS);
+  const [overallFittings, setOverallFittings] = useState({ ...EMPTY_FITTING_COUNTS });
   const [overallSketchMode, setOverallSketchMode] = useState("none");
   const [overallSketchLength, setOverallSketchLength] = useState(0);
   const [materialSource, setMaterialSource] = useState("manual");
-  const [overallMaterialFittings, setOverallMaterialFittings] = useState(
-    EMPTY_FITTING_COUNTS
-  );
+  const [overallMaterialFittings, setOverallMaterialFittings] = useState({
+    ...EMPTY_FITTING_COUNTS,
+  });
   const [takeoffTable, setTakeoffTable] = useState(() => cloneDefaultTakeoffTable());
   const nextCalculatorRunId = useRef(2);
-  const [calculatorRuns, setCalculatorRuns] = useState([
-    {
-      id: "run-1",
-      label: "Run 1",
-      length: "",
-      unit: "inches",
-      direction: "east",
-    },
-  ]);
-  const [savedJobs, setSavedJobs] = useState([]);
-  const [selectedSavedJobId, setSelectedSavedJobId] = useState("");
+  const [calculatorRuns, setCalculatorRuns] = useState(() => createDefaultCalculatorRuns());
+
+  const [authUser, setAuthUser] = useState(null);
+  const [plan, setPlan] = useState(DEFAULT_PLAN);
+  const [features, setFeatures] = useState(() => resolveFeatures(DEFAULT_PLAN));
+  const [userEmail, setUserEmail] = useState("");
+  const [saveStatus, setSaveStatus] = useState("");
+  const [migrationNote, setMigrationNote] = useState("");
+  const [showDashboard, setShowDashboard] = useState(false);
+  const [jobList, setJobList] = useState([]);
+  const [busyId, setBusyId] = useState(null);
+  const [cloudTakeoffRowId, setCloudTakeoffRowId] = useState(null);
+  const [authReady, setAuthReady] = useState(false);
+
+  const supabaseConfigured = getSupabaseConfig().configured;
+  const cloudEnabled = Boolean(
+    features.cloudJobs && authUser?.id && supabaseConfigured
+  );
 
   useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem(SAVED_JOBS_STORAGE_KEY);
-      if (!stored) return;
-      const parsed = JSON.parse(stored);
-      if (!Array.isArray(parsed)) return;
-      const normalized = parsed
-        .map((item) => ({
-          id: String(item.id || ""),
-          name: String(item.name || ""),
-          customerLocation: String(item.customerLocation || ""),
-          notes: String(item.notes || ""),
-        }))
-        .filter((item) => item.id);
-      setSavedJobs(normalized);
-    } catch {
-      setSavedJobs([]);
-    }
+    const stored = readLocalTakeoffTable();
+    if (stored) setTakeoffTable(stored);
   }, []);
 
   useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem(TAKEOFF_SETTINGS_STORAGE_KEY);
-      if (!stored) return;
-      const parsed = JSON.parse(stored);
-      setTakeoffTable(normalizeStoredTakeoffTable(parsed));
-    } catch {
-      // keep defaults
-    }
+    const cleanup = subscribeParentAuth({
+      onSession: async (session, meta) => {
+        const nextPlan = meta?.plan || DEFAULT_PLAN;
+        setPlan(nextPlan);
+        setFeatures(meta?.features || resolveFeatures(nextPlan));
+        setUserEmail(meta?.userEmail || "");
+
+        if (!session?.access_token) {
+          await clearBridgeSession();
+          setAuthUser(null);
+          setCloudTakeoffRowId(null);
+          setAuthReady(true);
+          return;
+        }
+
+        const applied = await applyBridgeSession(session);
+        if (!applied.ok) {
+          setAuthUser(null);
+          setSaveStatus(`Sign-in bridge failed: ${applied.error}`);
+          setAuthReady(true);
+          return;
+        }
+
+        const user = applied.user || applied.session?.user || null;
+        setAuthUser(user);
+        setAuthReady(true);
+      },
+    });
+    // Standalone (not embedded): still mark ready so local mode works.
+    const t = window.setTimeout(() => setAuthReady(true), 400);
+    return () => {
+      cleanup();
+      window.clearTimeout(t);
+    };
   }, []);
+
+  useEffect(() => {
+    if (!authReady) return;
+
+    let cancelled = false;
+
+    async function syncAfterAuth() {
+      const localJobs = readLocalJobsV2();
+      setJobList(mergeJobLists([], localJobs));
+
+      if (!cloudEnabled || !authUser?.id) return;
+
+      const resolved = resolveFeatures(plan);
+      if (resolved.companyStandards) {
+        const cloudTakeoff = await loadCloudTakeoffStandards(authUser.id);
+        if (cancelled) return;
+        if (cloudTakeoff.ok && cloudTakeoff.table) {
+          setTakeoffTable(cloudTakeoff.table);
+          writeLocalTakeoffTable(cloudTakeoff.table);
+          setCloudTakeoffRowId(cloudTakeoff.row?.id || null);
+        } else if (!wasTakeoffMigratedForUser(authUser.id)) {
+          const localTable = readLocalTakeoffTable() || cloneDefaultTakeoffTable();
+          const saved = await saveCloudTakeoffStandards(authUser.id, localTable, null);
+          if (!cancelled && saved.ok) {
+            setCloudTakeoffRowId(saved.row?.id || null);
+            markTakeoffMigratedForUser(authUser.id);
+          }
+        }
+      }
+
+      if (!wasJobsMigratedForUser(authUser.id)) {
+        const toImport = collectLocalJobsForMigration();
+        if (toImport.length > 0) {
+          const result = await importLocalJobsToCloud(toImport, authUser.id);
+          if (!cancelled) {
+            if (result.ok) {
+              markJobsMigratedForUser(authUser.id);
+              setMigrationNote(
+                result.imported > 0
+                  ? `Migrated ${result.imported} local job(s) to cloud.`
+                  : ""
+              );
+            } else {
+              setMigrationNote(`Cloud migration skipped: ${result.error}`);
+            }
+          }
+        } else {
+          markJobsMigratedForUser(authUser.id);
+        }
+      }
+
+      const listed = await listCloudJobs();
+      if (cancelled) return;
+      if (listed.ok) {
+        setJobList(mergeJobLists(listed.jobs, readLocalJobsV2()));
+      }
+    }
+
+    syncAfterAuth();
+    return () => {
+      cancelled = true;
+    };
+  }, [authReady, authUser?.id, cloudEnabled, plan]);
 
   const segmentRows = useMemo(() => {
     return segments.map((segment) => {
@@ -384,62 +375,184 @@ export default function Home() {
     };
   }, [segmentRows, rotateTurns, flipped, overallSketchMode, overallSketchLength]);
 
+  const printWarnings = useMemo(() => {
+    const warnings = [];
+    if (overallLengthCalc.isNonPositive) {
+      warnings.push(
+        "Estimated straight cut length from the overall calculator is zero or negative."
+      );
+    }
+    for (const segment of segmentRows) {
+      if (segment.known > 0 && segment.cutLength <= 0) {
+        warnings.push(
+          `${segment.label || "A run"} has takeoff greater than or equal to known length.`
+        );
+      }
+    }
+    return warnings;
+  }, [overallLengthCalc.isNonPositive, segmentRows]);
+
   function updateJobField(field, value) {
     setJob((prev) => ({ ...prev, [field]: value }));
   }
 
-  function persistSavedJobs(nextSavedJobs) {
-    setSavedJobs(nextSavedJobs);
-    window.localStorage.setItem(
-      SAVED_JOBS_STORAGE_KEY,
-      JSON.stringify(nextSavedJobs)
-    );
+  function applyEditorState(state) {
+    setCurrentJobId(state.id || null);
+    setJob(state.job);
+    setPipeSize(state.pipeSize);
+    setSegments(state.segments);
+    setExtraFittings(state.extraFittings || { ...EMPTY_FITTING_COUNTS });
+    setMaterialSource(state.materialSource || "manual");
+    setOverallMaterialFittings(state.overallMaterialFittings || { ...EMPTY_FITTING_COUNTS });
+    setOverallLength(String(state.overallLength ?? "120"));
+    setOverallUnit(state.overallUnit || "inches");
+    setOverallPipeSize(state.overallPipeSize || state.pipeSize || '2"');
+    setOverallFittings(state.overallFittings || { ...EMPTY_FITTING_COUNTS });
+    setCalculatorRuns(state.calculatorRuns || createDefaultCalculatorRuns());
+    setOverallSketchMode(state.overallSketchMode || "none");
+    setOverallSketchLength(Number(state.overallSketchLength) || 0);
+    setRotateTurns(Number(state.rotateTurns) || 0);
+    setFlipped(Boolean(state.flipped));
+    if (state.takeoffSnapshot) {
+      setTakeoffTable(normalizeStoredTakeoffTable(state.takeoffSnapshot));
+    }
+    const maxRunNum = (state.calculatorRuns || []).reduce((max, run) => {
+      const match = String(run.id || "").match(/run-(\d+)/);
+      return match ? Math.max(max, Number(match[1])) : max;
+    }, 1);
+    nextCalculatorRunId.current = maxRunNum + 1;
   }
 
-  function saveCurrentJob() {
-    const nextSavedJob = {
-      id: String(Date.now()),
-      name: job.name.trim(),
-      customerLocation: job.customerLocation.trim(),
-      notes: job.notes.trim(),
-    };
+  function resetEditorToBlank() {
+    applyEditorState({
+      id: null,
+      job: createEmptyJobMeta(),
+      pipeSize: '2"',
+      segments: [createDefaultSegment()],
+      extraFittings: { ...EMPTY_FITTING_COUNTS },
+      materialSource: "manual",
+      overallMaterialFittings: { ...EMPTY_FITTING_COUNTS },
+      overallLength: "120",
+      overallUnit: "inches",
+      overallPipeSize: '2"',
+      overallFittings: { ...EMPTY_FITTING_COUNTS },
+      calculatorRuns: createDefaultCalculatorRuns(),
+      overallSketchMode: "none",
+      overallSketchLength: 0,
+      rotateTurns: 0,
+      flipped: false,
+      takeoffSnapshot: null,
+    });
+    nextCalculatorRunId.current = 2;
+    setSaveStatus("");
+  }
 
-    if (!nextSavedJob.name && !nextSavedJob.customerLocation && !nextSavedJob.notes) {
+  function currentSnapshot(overrideId) {
+    return buildJobSnapshot({
+      id: overrideId ?? currentJobId,
+      job,
+      pipeSize,
+      segments,
+      extraFittings,
+      rotateTurns,
+      flipped,
+      overallLength,
+      overallUnit,
+      overallPipeSize,
+      overallFittings,
+      overallSketchMode,
+      overallSketchLength,
+      materialSource,
+      overallMaterialFittings,
+      calculatorRuns,
+      takeoffTable,
+    });
+  }
+
+  async function refreshJobList() {
+    const localJobs = readLocalJobsV2();
+    if (cloudEnabled) {
+      const listed = await listCloudJobs();
+      if (listed.ok) {
+        setJobList(mergeJobLists(listed.jobs, localJobs));
+        return;
+      }
+    }
+    setJobList(mergeJobLists([], localJobs));
+  }
+
+  async function saveCurrentJob() {
+    const hasContent =
+      job.name.trim() ||
+      job.customer.trim() ||
+      job.location.trim() ||
+      job.notes.trim() ||
+      segments.length > 0;
+
+    if (!hasContent) {
+      setSaveStatus("Nothing to save yet — add a job name or runs.");
       return;
     }
 
-    persistSavedJobs([nextSavedJob, ...savedJobs]);
-    setSelectedSavedJobId(nextSavedJob.id);
-  }
+    setSaveStatus("Saving…");
+    const idForSave = currentJobId || newLocalJobId();
+    const snapshot = currentSnapshot(idForSave);
+    snapshot.id = idForSave;
 
-  function applySavedJob(savedJobId) {
-    setSelectedSavedJobId(savedJobId);
-    const chosen = savedJobs.find((savedJob) => savedJob.id === savedJobId);
-    if (!chosen) return;
+    const localRow = {
+      ...snapshot,
+      id: idForSave,
+      _localOnly: !cloudEnabled,
+    };
+    upsertLocalJobV2(localRow);
+    setCurrentJobId(idForSave);
 
-    setJob((prev) => ({
-      ...prev,
-      name: chosen.name,
-      customerLocation: chosen.customerLocation,
-      notes: chosen.notes,
-    }));
+    if (cloudEnabled) {
+      const result = await saveCloudJob(snapshot, authUser.id, currentJobId);
+      if (result.ok && result.job) {
+        const cloudId = result.job.id;
+        setCurrentJobId(cloudId);
+        upsertLocalJobV2({
+          ...snapshot,
+          id: cloudId,
+          updated_at: result.job.updated_at || snapshot.updated_at,
+          created_at: result.job.created_at || snapshot.created_at,
+        });
+        if (idForSave !== cloudId && String(idForSave).startsWith("local-")) {
+          deleteLocalJobV2(idForSave);
+        }
+        setSaveStatus("Saved to cloud + local backup");
+      } else {
+        setSaveStatus(`Saved locally (cloud error: ${result.error || "unknown"})`);
+      }
+    } else {
+      setSaveStatus(
+        supabaseConfigured && features.cloudJobs
+          ? "Saved on this device (sign in for cloud sync)"
+          : "Saved on this device"
+      );
+    }
+
+    await refreshJobList();
   }
 
   function clearJobInfo() {
-    setSelectedSavedJobId("");
-    setJob((prev) => ({
-      ...prev,
-      name: "",
-      customerLocation: "",
-      notes: "",
-    }));
+    setJob(createEmptyJobMeta());
+    setCurrentJobId(null);
+    setSaveStatus("");
   }
 
-  function persistTakeoffTable(nextTable) {
-    try {
-      window.localStorage.setItem(TAKEOFF_SETTINGS_STORAGE_KEY, JSON.stringify(nextTable));
-    } catch {
-      // ignore quota / private mode
+  async function persistTakeoffTable(nextTable) {
+    writeLocalTakeoffTable(nextTable);
+    if (cloudEnabled && features.companyStandards && authUser?.id) {
+      const saved = await saveCloudTakeoffStandards(
+        authUser.id,
+        nextTable,
+        cloudTakeoffRowId
+      );
+      if (saved.ok && saved.row?.id) {
+        setCloudTakeoffRowId(saved.row.id);
+      }
     }
   }
 
@@ -456,10 +569,16 @@ export default function Home() {
     });
   }
 
-  function resetTakeoffsToDefaults() {
+  async function resetTakeoffsToDefaults() {
     const next = cloneDefaultTakeoffTable();
     setTakeoffTable(next);
-    persistTakeoffTable(next);
+    writeLocalTakeoffTable(next);
+    if (cloudEnabled && features.companyStandards && authUser?.id) {
+      const saved = await resetCloudTakeoffToDefaults(authUser.id, cloudTakeoffRowId);
+      if (saved.ok && saved.row?.id) {
+        setCloudTakeoffRowId(saved.row.id);
+      }
+    }
   }
 
   function addPipeRun() {
@@ -608,346 +727,379 @@ export default function Home() {
     setOverallSketchLength(0);
   }
 
+  async function loadJobById(id) {
+    if (String(id).startsWith("local-") || !cloudEnabled) {
+      const local = readLocalJobsV2().find((item) => String(item.id) === String(id));
+      if (!local) return null;
+      return local;
+    }
+    const loaded = await getCloudJob(id);
+    if (loaded.ok && loaded.job) return loaded.job;
+    const local = readLocalJobsV2().find((item) => String(item.id) === String(id));
+    return local || null;
+  }
+
+  async function handleOpenJob(id) {
+    setBusyId(id);
+    try {
+      const row = await loadJobById(id);
+      if (!row) {
+        setSaveStatus("Could not open that job.");
+        return;
+      }
+      applyEditorState(snapshotToEditorState(row));
+      setShowDashboard(false);
+      setSaveStatus("Job loaded");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function handleDuplicateJob(id) {
+    setBusyId(id);
+    try {
+      if (cloudEnabled && !String(id).startsWith("local-")) {
+        const result = await duplicateCloudJob(id, authUser.id);
+        if (result.ok && result.job) {
+          upsertLocalJobV2(result.job);
+          await refreshJobList();
+          setSaveStatus("Job duplicated");
+          return;
+        }
+      }
+
+      const row = await loadJobById(id);
+      if (!row) {
+        setSaveStatus("Could not duplicate that job.");
+        return;
+      }
+      const state = snapshotToEditorState(row);
+      const copyId = newLocalJobId();
+      const snapshot = buildJobSnapshot({
+        ...state,
+        id: copyId,
+        job: {
+          ...state.job,
+          name: `${state.job.name || "Untitled Job"} (copy)`,
+        },
+        takeoffTable: state.takeoffSnapshot || takeoffTable,
+      });
+      snapshot.id = copyId;
+      snapshot.job_name = `${row.job_name || row.name || "Untitled Job"} (copy)`;
+
+      if (cloudEnabled) {
+        const saved = await saveCloudJob(snapshot, authUser.id, null);
+        if (saved.ok && saved.job) {
+          upsertLocalJobV2(saved.job);
+        } else {
+          upsertLocalJobV2(snapshot);
+        }
+      } else {
+        upsertLocalJobV2(snapshot);
+      }
+      await refreshJobList();
+      setSaveStatus("Job duplicated");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function handleExportJob(id) {
+    setBusyId(id);
+    try {
+      const row = await loadJobById(id);
+      if (!row) {
+        setSaveStatus("Could not export that job.");
+        return;
+      }
+      applyEditorState(snapshotToEditorState(row));
+      setShowDashboard(false);
+      window.setTimeout(() => window.print(), 150);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function handleDeleteJob(id) {
+    if (!window.confirm("Delete this job? This cannot be undone.")) return;
+    setBusyId(id);
+    try {
+      deleteLocalJobV2(id);
+      if (cloudEnabled && !String(id).startsWith("local-")) {
+        await deleteCloudJob(id, authUser.id);
+      }
+      if (String(currentJobId) === String(id)) {
+        setCurrentJobId(null);
+      }
+      await refreshJobList();
+      setSaveStatus("Job deleted");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  function handleNewJob() {
+    resetEditorToBlank();
+    setShowDashboard(false);
+  }
+
+  const statusLabel = cloudEnabled
+    ? `Signed in${userEmail ? ` · ${userEmail}` : ""} · ${plan}`
+    : supabaseConfigured
+      ? "Local mode · sign in via PipeSketch Pro for cloud"
+      : "Local mode · Supabase not configured";
+
   return (
     <div className={styles.page}>
-      <header className={styles.header}>
-        <h1>PipeSketchPro</h1>
-        <p>Simple field takeoff for pipe runs, fittings, and print-ready isometric output.</p>
-      </header>
-
-      <main className={styles.mainGrid}>
-        <div className={styles.leftColumn}>
-        <section className={`${styles.panel} ${styles.jobPanel}`}>
-          <h2>Job Info</h2>
-          <div className={styles.jobPresetRow}>
-            <label className={styles.inlineLabel}>
-              Saved Jobs
-              <select
-                value={selectedSavedJobId}
-                onChange={(event) => applySavedJob(event.target.value)}
-              >
-                <option value="">Select a saved job</option>
-                {savedJobs.map((savedJob) => (
-                  <option key={savedJob.id} value={savedJob.id}>
-                    {savedJob.name || "Untitled Job"}
-                    {savedJob.customerLocation ? ` - ${savedJob.customerLocation}` : ""}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-          <p className={styles.localOnlyNote}>Saved jobs are stored on this device only.</p>
-          <div className={styles.formGrid}>
-            <label>
-              Job Name
-              <input
-                value={job.name}
-                onChange={(event) => updateJobField("name", event.target.value)}
-                placeholder="Example: Boiler Room Retrofit"
-              />
-            </label>
-            <label>
-              Customer / Location
-              <input
-                value={job.customerLocation}
-                onChange={(event) => updateJobField("customerLocation", event.target.value)}
-                placeholder="Customer and site"
-              />
-            </label>
-            <label>
-              Date
-              <input
-                type="date"
-                value={job.date}
-                onChange={(event) => updateJobField("date", event.target.value)}
-              />
-            </label>
-            <label className={styles.fullWidth}>
-              Notes
-              <textarea
-                value={job.notes}
-                onChange={(event) => updateJobField("notes", event.target.value)}
-                placeholder="Scope notes, crew notes, install assumptions..."
-              />
-            </label>
-            <div className={`${styles.fullWidth} ${styles.jobActionsRow}`}>
+      <div className={styles.screenOnly}>
+        <header className={styles.header}>
+          <div className={styles.headerTop}>
+            <div>
+              <h1>PipeSketchPro</h1>
+              <p>
+                Simple field takeoff for pipe runs, fittings, and print-ready isometric output.
+              </p>
+            </div>
+            <div className={styles.headerActions}>
               <button
-                className={styles.secondaryActionBtn}
                 type="button"
+                className={styles.secondaryActionBtn}
+                onClick={() => {
+                  refreshJobList();
+                  setShowDashboard(true);
+                }}
+              >
+                My Jobs
+              </button>
+              <button
+                type="button"
+                className={styles.primaryBtn}
                 onClick={saveCurrentJob}
               >
-                Save Current Job
+                Save Job
               </button>
-              <button className={styles.secondaryActionBtn} type="button" onClick={clearJobInfo}>
-                Clear Job Info
+              <button type="button" className={styles.primaryBtn} onClick={exportPdf}>
+                Export PDF
               </button>
             </div>
           </div>
-        </section>
-
-        <section className={`${styles.panel} ${styles.takeoffSettingsPanel}`}>
-          <h2>Takeoff Settings</h2>
-          <p className={styles.helpText}>
-            Default takeoff values are starter estimates only. Takeoff values can vary by fitting
-            type, radius, schedule, manufacturer, and company field rules. Verify and adjust these
-            values for your job.
-          </p>
-          <p className={styles.localOnlyNote}>Takeoff values are stored on this device only.</p>
-          <div className={styles.takeoffTableWrap}>
-            <table className={styles.takeoffTable}>
-              <thead>
-                <tr>
-                  <th scope="col">Size</th>
-                  {FITTING_TYPES.map((fitting) => (
-                    <th key={fitting} scope="col" title={fitting}>
-                      {FITTING_COLUMN_LABELS[fitting]}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {PIPE_SIZES.map((size) => (
-                  <tr key={size}>
-                    <th scope="row">{size}</th>
-                    {FITTING_TYPES.map((fitting) => (
-                      <td key={fitting}>
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          aria-label={`${size} ${fitting} takeoff inches`}
-                          value={takeoffTable[size][fitting]}
-                          onChange={(event) =>
-                            updateTakeoffCell(size, fitting, event.target.value)
-                          }
-                        />
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className={styles.statusBar}>
+            <span className={cloudEnabled ? styles.statusOk : styles.statusWarn}>
+              {statusLabel}
+            </span>
+            {saveStatus ? <span className={styles.saveStatusLine}>{saveStatus}</span> : null}
           </div>
-          <button
-            className={styles.secondaryActionBtn}
-            type="button"
-            onClick={resetTakeoffsToDefaults}
-          >
-            Reset to Defaults
-          </button>
-        </section>
+          {migrationNote ? <p className={styles.migrationNote}>{migrationNote}</p> : null}
+        </header>
 
-        <section className={`${styles.panel} ${styles.fittingsPanel}`}>
-          <h2>Fittings</h2>
-          <p className={styles.helpText}>Quick-add extra fittings not already assigned to run starts/ends.</p>
-          <div className={styles.fitButtons}>
-            {FITTING_TYPES.map((fitting) => (
-              <button key={fitting} onClick={() => addFittingQuick(fitting)} type="button">
-                {fitting === "90 elbow" ? "Add 90" : fitting === "45 elbow" ? "Add 45" : `Add ${fitting}`}
-              </button>
-            ))}
-          </div>
-        </section>
-
-        <section className={`${styles.panel} ${styles.pipeRunsPanel}`}>
-          <h2>Pipe & Runs</h2>
-          <p className={styles.helpText}>
-            Use this section if you already know each run length and direction. You can enter
-            runs here manually.
-          </p>
-          <label className={styles.inlineLabel}>
-            Pipe Size
-            <select value={pipeSize} onChange={(event) => setPipeSize(event.target.value)}>
-              {PIPE_SIZES.map((size) => (
-                <option key={size} value={size}>
-                  {size}
-                </option>
-              ))}
-            </select>
-          </label>
-          <p className={styles.helperNote}>
-            Tip: Add each straight section as a run. Use Direction to show the next turn.
-            Example: Run 1 East + 90 elbow, Run 2 North.
-          </p>
-
-          <div className={styles.runList}>
-            {segmentRows.map((segment, index) => (
-              <article className={styles.runCard} key={segment.id}>
-                <div className={styles.runHeader}>
-                  <strong>Run {index + 1}</strong>
-                  <button onClick={() => removePipeRun(segment.id)} type="button">
-                    Remove
+        <main className={styles.mainGrid}>
+          <div className={styles.leftColumn}>
+            <section className={`${styles.panel} ${styles.jobPanel}`}>
+              <h2>Job Info</h2>
+              <p className={styles.localOnlyNote}>
+                {cloudEnabled
+                  ? "Full job state saves to cloud with a local backup on this device."
+                  : "Full job state is stored on this device. Cloud sync when signed in."}
+              </p>
+              <div className={styles.formGrid}>
+                <label>
+                  Job Name
+                  <input
+                    value={job.name}
+                    onChange={(event) => updateJobField("name", event.target.value)}
+                    placeholder="Example: Boiler Room Retrofit"
+                  />
+                </label>
+                <label>
+                  Customer
+                  <input
+                    value={job.customer}
+                    onChange={(event) => updateJobField("customer", event.target.value)}
+                    placeholder="Customer name"
+                  />
+                </label>
+                <label>
+                  Location
+                  <input
+                    value={job.location}
+                    onChange={(event) => updateJobField("location", event.target.value)}
+                    placeholder="Site / building"
+                  />
+                </label>
+                <label>
+                  Date
+                  <input
+                    type="date"
+                    value={job.date}
+                    onChange={(event) => updateJobField("date", event.target.value)}
+                  />
+                </label>
+                <label className={styles.fullWidth}>
+                  Notes
+                  <textarea
+                    value={job.notes}
+                    onChange={(event) => updateJobField("notes", event.target.value)}
+                    placeholder="Scope notes, crew notes, install assumptions..."
+                  />
+                </label>
+                <div className={`${styles.fullWidth} ${styles.jobActionsRow}`}>
+                  <button
+                    className={styles.secondaryActionBtn}
+                    type="button"
+                    onClick={saveCurrentJob}
+                  >
+                    Save Current Job
+                  </button>
+                  <button
+                    className={styles.secondaryActionBtn}
+                    type="button"
+                    onClick={clearJobInfo}
+                  >
+                    Clear Job Info
+                  </button>
+                  <button
+                    className={styles.secondaryActionBtn}
+                    type="button"
+                    onClick={handleNewJob}
+                  >
+                    New Job
                   </button>
                 </div>
-                <div className={styles.runFields}>
-                  <label>
-                    Label
-                    <input
-                      value={segment.label}
-                      onChange={(event) => updateSegment(segment.id, "label", event.target.value)}
-                    />
-                  </label>
-                  <label>
-                    Known Length (in)
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={segment.knownLength}
-                      onChange={(event) => updateSegment(segment.id, "knownLength", event.target.value)}
-                    />
-                  </label>
-                  <label>
-                    Direction
-                    <select
-                      value={segment.direction}
-                      onChange={(event) => updateSegment(segment.id, "direction", event.target.value)}
-                    >
-                      {DIRECTION_OPTIONS.map((direction) => (
-                        <option key={direction.value} value={direction.value}>
-                          {direction.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    Start Fitting
-                    <select
-                      value={segment.startFitting}
-                      onChange={(event) => updateSegment(segment.id, "startFitting", event.target.value)}
-                    >
-                      <option value="none">None</option>
-                      {FITTING_TYPES.map((type) => (
-                        <option key={type} value={type}>
-                          {type}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    End Fitting
-                    <select
-                      value={segment.endFitting}
-                      onChange={(event) => updateSegment(segment.id, "endFitting", event.target.value)}
-                    >
-                      <option value="none">None</option>
-                      {FITTING_TYPES.map((type) => (
-                        <option key={type} value={type}>
-                          {type}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
-                <div className={styles.calcRow}>
-                  <span>Takeoff: {segment.totalTakeoff.toFixed(2)} in</span>
-                  <span>Estimated Cut: {segment.cutLength.toFixed(2)} in</span>
-                </div>
-              </article>
-            ))}
-          </div>
-          <p className={styles.helperNote}>
-            The drawing updates automatically as you add or edit runs.
-          </p>
-          <button className={styles.primaryBtn} onClick={addPipeRun} type="button">
-            Add Pipe Run
-          </button>
-        </section>
-        </div>
-
-        <div className={styles.rightColumn}>
-        <section className={`${styles.panel} ${styles.overallPanel}`}>
-          <h2>Overall Length Calculator</h2>
-          <p className={styles.helpText}>
-            Use this section if you know the total overall length first. Add run breakdowns here,
-            then click Build Drawing From Overall Length to fill the Pipe & Runs section
-            automatically.
-          </p>
-
-          <div className={styles.runFields}>
-            <label>
-              Overall Length
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                value={overallLength}
-                onChange={(event) => setOverallLength(event.target.value)}
-              />
-            </label>
-            <label>
-              Unit
-              <select
-                value={overallUnit}
-                onChange={(event) => setOverallUnit(event.target.value)}
-              >
-                <option value="inches">Inches</option>
-                <option value="feet">Feet</option>
-              </select>
-            </label>
-            <label>
-              Pipe Size
-              <select
-                value={overallPipeSize}
-                onChange={(event) => setOverallPipeSize(event.target.value)}
-              >
-                {PIPE_SIZES.map((size) => (
-                  <option key={size} value={size}>
-                    {size}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-
-          <div className={styles.runList}>
-            <article className={styles.runCard}>
-              <div className={styles.runHeader}>
-                <strong>Run Breakdown</strong>
               </div>
+            </section>
+
+            <section className={`${styles.panel} ${styles.takeoffSettingsPanel}`}>
+              <h2>Takeoff Settings</h2>
+              <p className={styles.helpText}>
+                Default takeoff values are starter estimates only. Takeoff values can vary by fitting
+                type, radius, schedule, manufacturer, and company field rules. Verify and adjust these
+                values for your job.
+              </p>
+              <p className={styles.localOnlyNote}>
+                {cloudEnabled && features.companyStandards
+                  ? "Standards sync to your account and stay cached on this device."
+                  : "Takeoff values are stored on this device."}
+              </p>
+              <div className={styles.takeoffTableWrap}>
+                <table className={styles.takeoffTable}>
+                  <thead>
+                    <tr>
+                      <th scope="col">Size</th>
+                      {FITTING_TYPES.map((fitting) => (
+                        <th key={fitting} scope="col" title={fitting}>
+                          {FITTING_COLUMN_LABELS[fitting]}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {PIPE_SIZES.map((size) => (
+                      <tr key={size}>
+                        <th scope="row">{size}</th>
+                        {FITTING_TYPES.map((fitting) => (
+                          <td key={fitting}>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              aria-label={`${size} ${fitting} takeoff inches`}
+                              value={takeoffTable[size][fitting]}
+                              onChange={(event) =>
+                                updateTakeoffCell(size, fitting, event.target.value)
+                              }
+                            />
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <button
+                className={styles.secondaryActionBtn}
+                type="button"
+                onClick={resetTakeoffsToDefaults}
+              >
+                Reset to Defaults
+              </button>
+            </section>
+
+            <section className={`${styles.panel} ${styles.fittingsPanel}`}>
+              <h2>Fittings</h2>
+              <p className={styles.helpText}>
+                Quick-add extra fittings not already assigned to run starts/ends.
+              </p>
+              <div className={styles.fitButtons}>
+                {FITTING_TYPES.map((fitting) => (
+                  <button key={fitting} onClick={() => addFittingQuick(fitting)} type="button">
+                    {fitting === "90 elbow"
+                      ? "Add 90"
+                      : fitting === "45 elbow"
+                        ? "Add 45"
+                        : `Add ${fitting}`}
+                  </button>
+                ))}
+              </div>
+            </section>
+
+            <section className={`${styles.panel} ${styles.pipeRunsPanel}`}>
+              <h2>Pipe & Runs</h2>
+              <p className={styles.helpText}>
+                Use this section if you already know each run length and direction. You can enter
+                runs here manually.
+              </p>
+              <label className={styles.inlineLabel}>
+                Pipe Size
+                <select value={pipeSize} onChange={(event) => setPipeSize(event.target.value)}>
+                  {PIPE_SIZES.map((size) => (
+                    <option key={size} value={size}>
+                      {size}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <p className={styles.helperNote}>
+                Tip: Add each straight section as a run. Use Direction to show the next turn.
+                Example: Run 1 East + 90 elbow, Run 2 North.
+              </p>
+
               <div className={styles.runList}>
-                {calculatorRuns.map((run, index) => (
-                  <div key={run.id} className={styles.calcRunRow}>
+                {segmentRows.map((segment, index) => (
+                  <article className={styles.runCard} key={segment.id}>
+                    <div className={styles.runHeader}>
+                      <strong>Run {index + 1}</strong>
+                      <button onClick={() => removePipeRun(segment.id)} type="button">
+                        Remove
+                      </button>
+                    </div>
                     <div className={styles.runFields}>
                       <label>
                         Label
                         <input
-                          value={run.label}
+                          value={segment.label}
                           onChange={(event) =>
-                            updateCalculatorRun(run.id, "label", event.target.value)
+                            updateSegment(segment.id, "label", event.target.value)
                           }
-                          placeholder={`Run ${index + 1}`}
                         />
                       </label>
                       <label>
-                        Length
+                        Known Length (in)
                         <input
-                          type="text"
-                          inputMode="decimal"
-                          value={run.length}
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={segment.knownLength}
                           onChange={(event) =>
-                            updateCalculatorRun(run.id, "length", event.target.value)
+                            updateSegment(segment.id, "knownLength", event.target.value)
                           }
                         />
-                      </label>
-                      <label>
-                        Unit
-                        <select
-                          value={run.unit}
-                          onChange={(event) =>
-                            updateCalculatorRun(run.id, "unit", event.target.value)
-                          }
-                        >
-                          <option value="inches">Inches</option>
-                          <option value="feet">Feet</option>
-                        </select>
                       </label>
                       <label>
                         Direction
                         <select
-                          value={run.direction}
+                          value={segment.direction}
                           onChange={(event) =>
-                            updateCalculatorRun(run.id, "direction", event.target.value)
+                            updateSegment(segment.id, "direction", event.target.value)
                           }
                         >
                           {DIRECTION_OPTIONS.map((direction) => (
@@ -957,187 +1109,366 @@ export default function Home() {
                           ))}
                         </select>
                       </label>
+                      <label>
+                        Start Fitting
+                        <select
+                          value={segment.startFitting}
+                          onChange={(event) =>
+                            updateSegment(segment.id, "startFitting", event.target.value)
+                          }
+                        >
+                          <option value="none">None</option>
+                          {FITTING_TYPES.map((type) => (
+                            <option key={type} value={type}>
+                              {type}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        End Fitting
+                        <select
+                          value={segment.endFitting}
+                          onChange={(event) =>
+                            updateSegment(segment.id, "endFitting", event.target.value)
+                          }
+                        >
+                          <option value="none">None</option>
+                          {FITTING_TYPES.map((type) => (
+                            <option key={type} value={type}>
+                              {type}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => removeCalculatorRun(run.id)}
-                      disabled={calculatorRuns.length === 1}
-                    >
-                      Remove
-                    </button>
-                  </div>
+                    <div className={styles.calcRow}>
+                      <span>Takeoff: {segment.totalTakeoff.toFixed(2)} in</span>
+                      <span>Estimated Cut: {segment.cutLength.toFixed(2)} in</span>
+                    </div>
+                  </article>
                 ))}
               </div>
+              <p className={styles.helperNote}>
+                The drawing updates automatically as you add or edit runs.
+              </p>
+              <button className={styles.primaryBtn} onClick={addPipeRun} type="button">
+                Add Pipe Run
+              </button>
+            </section>
+          </div>
+
+          <div className={styles.rightColumn}>
+            <section className={`${styles.panel} ${styles.overallPanel}`}>
+              <h2>Overall Length Calculator</h2>
+              <p className={styles.helpText}>
+                Use this section if you know the total overall length first. Add run breakdowns here,
+                then click Build Drawing From Overall Length to fill the Pipe & Runs section
+                automatically.
+              </p>
+
+              <div className={styles.runFields}>
+                <label>
+                  Overall Length
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={overallLength}
+                    onChange={(event) => setOverallLength(event.target.value)}
+                  />
+                </label>
+                <label>
+                  Unit
+                  <select
+                    value={overallUnit}
+                    onChange={(event) => setOverallUnit(event.target.value)}
+                  >
+                    <option value="inches">Inches</option>
+                    <option value="feet">Feet</option>
+                  </select>
+                </label>
+                <label>
+                  Pipe Size
+                  <select
+                    value={overallPipeSize}
+                    onChange={(event) => setOverallPipeSize(event.target.value)}
+                  >
+                    {PIPE_SIZES.map((size) => (
+                      <option key={size} value={size}>
+                        {size}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              <div className={styles.runList}>
+                <article className={styles.runCard}>
+                  <div className={styles.runHeader}>
+                    <strong>Run Breakdown</strong>
+                  </div>
+                  <div className={styles.runList}>
+                    {calculatorRuns.map((run, index) => (
+                      <div key={run.id} className={styles.calcRunRow}>
+                        <div className={styles.runFields}>
+                          <label>
+                            Label
+                            <input
+                              value={run.label}
+                              onChange={(event) =>
+                                updateCalculatorRun(run.id, "label", event.target.value)
+                              }
+                              placeholder={`Run ${index + 1}`}
+                            />
+                          </label>
+                          <label>
+                            Length
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              value={run.length}
+                              onChange={(event) =>
+                                updateCalculatorRun(run.id, "length", event.target.value)
+                              }
+                            />
+                          </label>
+                          <label>
+                            Unit
+                            <select
+                              value={run.unit}
+                              onChange={(event) =>
+                                updateCalculatorRun(run.id, "unit", event.target.value)
+                              }
+                            >
+                              <option value="inches">Inches</option>
+                              <option value="feet">Feet</option>
+                            </select>
+                          </label>
+                          <label>
+                            Direction
+                            <select
+                              value={run.direction}
+                              onChange={(event) =>
+                                updateCalculatorRun(run.id, "direction", event.target.value)
+                              }
+                            >
+                              {DIRECTION_OPTIONS.map((direction) => (
+                                <option key={direction.value} value={direction.value}>
+                                  {direction.label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => removeCalculatorRun(run.id)}
+                          disabled={calculatorRuns.length === 1}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  <div className={styles.materialSummary}>
+                    <p>Run Total: {calculatorRunTotals.totalInches.toFixed(2)} in</p>
+                    {calculatorRunTotals.matchesOverall ? (
+                      <p>Run total matches overall length.</p>
+                    ) : (
+                      <p>
+                        Difference from overall length:{" "}
+                        {Math.abs(calculatorRunTotals.differenceInches).toFixed(2)} in{" "}
+                        {calculatorRunTotals.differenceInches > 0 ? "(over)" : "(under)"}
+                      </p>
+                    )}
+                  </div>
+                  <button type="button" onClick={addCalculatorRun}>
+                    Add Calculator Run
+                  </button>
+                </article>
+              </div>
+
+              <div className={styles.runList}>
+                <article className={styles.runCard}>
+                  <strong>Fitting Counts</strong>
+                  <div className={styles.runFields}>
+                    {FITTING_TYPES.map((fitting) => (
+                      <label key={fitting}>
+                        {fitting}
+                        <input
+                          type="number"
+                          min="0"
+                          step="1"
+                          value={overallFittings[fitting]}
+                          onChange={(event) =>
+                            updateOverallFittingCount(fitting, event.target.value)
+                          }
+                        />
+                      </label>
+                    ))}
+                  </div>
+                </article>
+              </div>
+
               <div className={styles.materialSummary}>
-                <p>Run Total: {calculatorRunTotals.totalInches.toFixed(2)} in</p>
-                {calculatorRunTotals.matchesOverall ? (
-                  <p>Run total matches overall length.</p>
-                ) : (
-                  <p>
-                    Difference from overall length:{" "}
-                    {Math.abs(calculatorRunTotals.differenceInches).toFixed(2)} in{" "}
-                    {calculatorRunTotals.differenceInches > 0 ? "(over)" : "(under)"}
+                <p>Overall Length: {overallLengthCalc.overallInches.toFixed(2)} in</p>
+                <p>Total Fitting Takeoff: {overallLengthCalc.totalTakeoff.toFixed(2)} in</p>
+                <p>
+                  Estimated Straight Pipe Cut Length:{" "}
+                  {Math.max(overallLengthCalc.straightCutLength, 0).toFixed(2)} in
+                </p>
+                {overallLengthCalc.isNonPositive && (
+                  <p className={styles.warningText}>
+                    Warning: Estimated cut length is zero or negative. Check overall length, size,
+                    and fitting counts.
                   </p>
                 )}
               </div>
-              <button type="button" onClick={addCalculatorRun}>
-                Add Calculator Run
-              </button>
-            </article>
-          </div>
-
-          <div className={styles.runList}>
-            <article className={styles.runCard}>
-              <strong>Fitting Counts</strong>
-              <div className={styles.runFields}>
-                {FITTING_TYPES.map((fitting) => (
-                  <label key={fitting}>
-                    {fitting}
-                    <input
-                      type="number"
-                      min="0"
-                      step="1"
-                      value={overallFittings[fitting]}
-                      onChange={(event) =>
-                        updateOverallFittingCount(fitting, event.target.value)
-                      }
-                    />
-                  </label>
-                ))}
-              </div>
-            </article>
-          </div>
-
-          <div className={styles.materialSummary}>
-            <p>Overall Length: {overallLengthCalc.overallInches.toFixed(2)} in</p>
-            <p>Total Fitting Takeoff: {overallLengthCalc.totalTakeoff.toFixed(2)} in</p>
-            <p>
-              Estimated Straight Pipe Cut Length:{" "}
-              {Math.max(overallLengthCalc.straightCutLength, 0).toFixed(2)} in
-            </p>
-            {overallLengthCalc.isNonPositive && (
-              <p className={styles.warningText}>
-                Warning: Estimated cut length is zero or negative. Check overall length, size, and fitting counts.
-              </p>
-            )}
-          </div>
-          <button
-            className={styles.primaryBtn}
-            type="button"
-            onClick={buildDrawingFromOverallLength}
-          >
-            Build Drawing From Overall Length
-          </button>
-        </section>
-
-        <section className={`${styles.panel} ${styles.drawingPanel}`}>
-          <div className={styles.drawingTop}>
-            <div>
-              <h2>Drawing Preview</h2>
-              <p className={styles.helpText}>Simplified field sketch for quick communication only.</p>
-            </div>
-            <div className={styles.drawButtons}>
-              <button type="button" onClick={() => setRotateTurns((prev) => prev - 1)}>
-                Rotate Left
-              </button>
-              <button type="button" onClick={() => setRotateTurns((prev) => prev + 1)}>
-                Rotate Right
-              </button>
-              <button type="button" onClick={() => setFlipped((prev) => !prev)}>
-                Flip View
-              </button>
               <button
+                className={styles.primaryBtn}
                 type="button"
-                onClick={() => {
-                  setRotateTurns(0);
-                  setFlipped(false);
-                }}
+                onClick={buildDrawingFromOverallLength}
               >
-                Reset View
+                Build Drawing From Overall Length
               </button>
-              <button type="button" className={styles.primaryBtn} onClick={exportPdf}>
-                Export PDF
-              </button>
-            </div>
-          </div>
+            </section>
 
-          <div className={styles.svgWrap}>
-            <svg
-              viewBox={`0 0 ${drawingModel.width} ${drawingModel.height}`}
-              role="img"
-              aria-label="Pipe isometric preview"
-            >
-              <rect x="0" y="0" width={drawingModel.width} height={drawingModel.height} />
-              {drawingModel.points.slice(0, -1).map((point, index) => {
-                const next = drawingModel.points[index + 1];
-                const midX = (point[0] + next[0]) / 2;
-                const midY = (point[1] + next[1]) / 2;
-                const dx = next[0] - point[0];
-                const dy = next[1] - point[1];
-                const magnitude = Math.hypot(dx, dy) || 1;
-                const offset = 14;
-                const labelX = midX + (-dy / magnitude) * offset;
-                const labelY = midY + (dx / magnitude) * offset;
-                const rawAngle = (Math.atan2(dy, dx) * 180) / Math.PI;
-                const readableAngle =
-                  rawAngle > 90 || rawAngle < -90 ? rawAngle + 180 : rawAngle;
-                const segment = segmentRows[index];
-                const runText = segment?.label || `Run ${index + 1}`;
-                const lengthText = `${formatRunLength(segment?.known)} in`;
-                const directionText = formatDirectionLabel(segment?.direction);
-                return (
-                  <g key={`seg-${index}`}>
-                    <line x1={point[0]} y1={point[1]} x2={next[0]} y2={next[1]} />
-                    <text
-                      x={labelX}
-                      y={labelY}
-                      transform={`rotate(${readableAngle} ${labelX} ${labelY})`}
-                      textAnchor="middle"
-                      dominantBaseline="middle"
-                    >
-                      {`${runText} • ${lengthText} • ${directionText}`}
-                    </text>
-                  </g>
-                );
-              })}
-              {drawingModel.points.map((point, index) => (
-                <circle key={`pt-${index}`} cx={point[0]} cy={point[1]} r="3.5" />
-              ))}
-            </svg>
-          </div>
-        </section>
+            <section className={`${styles.panel} ${styles.drawingPanel}`}>
+              <div className={styles.drawingTop}>
+                <div>
+                  <h2>Drawing Preview</h2>
+                  <p className={styles.helpText}>
+                    Simplified field sketch for quick communication only.
+                  </p>
+                </div>
+                <div className={styles.drawButtons}>
+                  <button type="button" onClick={() => setRotateTurns((prev) => prev - 1)}>
+                    Rotate Left
+                  </button>
+                  <button type="button" onClick={() => setRotateTurns((prev) => prev + 1)}>
+                    Rotate Right
+                  </button>
+                  <button type="button" onClick={() => setFlipped((prev) => !prev)}>
+                    Flip View
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRotateTurns(0);
+                      setFlipped(false);
+                    }}
+                  >
+                    Reset View
+                  </button>
+                  <button type="button" className={styles.primaryBtn} onClick={exportPdf}>
+                    Export PDF
+                  </button>
+                </div>
+              </div>
 
-        <section className={`${styles.panel} ${styles.materialPanel}`}>
-          <h2>Material List</h2>
-          <div className={styles.materialSummary}>
-            <p>Pipe Size: {pipeSize}</p>
-            <p>Total Known Length: {materialTotals.totalKnownLength.toFixed(2)} in</p>
-            <p>Total Estimated Takeoff: {materialTotals.totalTakeoff.toFixed(2)} in</p>
-            <p>Total Estimated Cut Length: {materialTotals.totalCutLength.toFixed(2)} in</p>
+              <div className={styles.svgWrap}>
+                <svg
+                  viewBox={`0 0 ${drawingModel.width} ${drawingModel.height}`}
+                  role="img"
+                  aria-label="Pipe isometric preview"
+                >
+                  <rect x="0" y="0" width={drawingModel.width} height={drawingModel.height} />
+                  {drawingModel.points.slice(0, -1).map((point, index) => {
+                    const next = drawingModel.points[index + 1];
+                    const midX = (point[0] + next[0]) / 2;
+                    const midY = (point[1] + next[1]) / 2;
+                    const dx = next[0] - point[0];
+                    const dy = next[1] - point[1];
+                    const magnitude = Math.hypot(dx, dy) || 1;
+                    const offset = 14;
+                    const labelX = midX + (-dy / magnitude) * offset;
+                    const labelY = midY + (dx / magnitude) * offset;
+                    const rawAngle = (Math.atan2(dy, dx) * 180) / Math.PI;
+                    const readableAngle =
+                      rawAngle > 90 || rawAngle < -90 ? rawAngle + 180 : rawAngle;
+                    const segment = segmentRows[index];
+                    const runText = segment?.label || `Run ${index + 1}`;
+                    const lengthText = `${formatRunLength(segment?.known)} in`;
+                    const directionText = formatDirectionLabel(segment?.direction);
+                    return (
+                      <g key={`seg-${index}`}>
+                        <line x1={point[0]} y1={point[1]} x2={next[0]} y2={next[1]} />
+                        <text
+                          x={labelX}
+                          y={labelY}
+                          transform={`rotate(${readableAngle} ${labelX} ${labelY})`}
+                          textAnchor="middle"
+                          dominantBaseline="middle"
+                        >
+                          {`${runText} • ${lengthText} • ${directionText}`}
+                        </text>
+                      </g>
+                    );
+                  })}
+                  {drawingModel.points.map((point, index) => (
+                    <circle key={`pt-${index}`} cx={point[0]} cy={point[1]} r="3.5" />
+                  ))}
+                </svg>
+              </div>
+            </section>
+
+            <section className={`${styles.panel} ${styles.materialPanel}`}>
+              <h2>Material List</h2>
+              <div className={styles.materialSummary}>
+                <p>Pipe Size: {pipeSize}</p>
+                <p>Total Known Length: {materialTotals.totalKnownLength.toFixed(2)} in</p>
+                <p>Total Estimated Takeoff: {materialTotals.totalTakeoff.toFixed(2)} in</p>
+                <p>Total Estimated Cut Length: {materialTotals.totalCutLength.toFixed(2)} in</p>
+              </div>
+              <table className={styles.bomTable}>
+                <thead>
+                  <tr>
+                    <th>Item</th>
+                    <th>Qty</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>Pipe ({pipeSize})</td>
+                    <td>{materialTotals.totalCutLength.toFixed(2)} in</td>
+                  </tr>
+                  {FITTING_TYPES.map((fitting) => (
+                    <tr key={fitting}>
+                      <td>{fitting}</td>
+                      <td>{materialTotals.fittingTotals[fitting]}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </section>
           </div>
-          <table className={styles.bomTable}>
-            <thead>
-              <tr>
-                <th>Item</th>
-                <th>Qty</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>Pipe ({pipeSize})</td>
-                <td>{materialTotals.totalCutLength.toFixed(2)} in</td>
-              </tr>
-              {FITTING_TYPES.map((fitting) => (
-                <tr key={fitting}>
-                  <td>{fitting}</td>
-                  <td>{materialTotals.fittingTotals[fitting]}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </section>
-        </div>
-      </main>
+        </main>
+      </div>
+
+      <PrintDocument
+        job={job}
+        pipeSize={pipeSize}
+        segmentRows={segmentRows}
+        materialTotals={materialTotals}
+        drawingModel={drawingModel}
+        warnings={printWarnings}
+      />
+
+      {showDashboard ? (
+        <JobDashboard
+          jobs={jobList}
+          cloudEnabled={cloudEnabled}
+          saveStatus={saveStatus}
+          busyId={busyId}
+          onOpen={handleOpenJob}
+          onDuplicate={handleDuplicateJob}
+          onExport={handleExportJob}
+          onDelete={handleDeleteJob}
+          onNewJob={handleNewJob}
+          onClose={() => setShowDashboard(false)}
+        />
+      ) : null}
     </div>
   );
 }

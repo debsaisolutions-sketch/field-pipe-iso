@@ -428,18 +428,264 @@
   box-sizing: border-box;
 }
 
+.headerTop {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+.headerActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.statusBar {
+  margin-top: 0.75rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #44545e;
+}
+
+.statusOk {
+  color: #0a6975;
+}
+
+.statusWarn {
+  color: #9a5b00;
+}
+
+.migrationNote,
+.saveStatusLine {
+  margin-top: 0.5rem;
+  font-size: 0.95rem;
+  color: #0a6975;
+  font-weight: 600;
+}
+
+.dangerBtn {
+  background: #f8e8e5 !important;
+  border-color: #d9a398 !important;
+  color: #7a2416 !important;
+}
+
+.dashboardOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(15, 23, 32, 0.45);
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  padding: 0.75rem;
+}
+
+.dashboardSheet {
+  width: min(920px, 100%);
+  max-height: 100%;
+  overflow: auto;
+  background: #ffffff;
+  border-radius: 12px;
+  border: 1px solid #c9dada;
+  padding: 1rem;
+}
+
+.dashboardHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+
+.dashboardHeaderActions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.dashboardEmpty {
+  text-align: center;
+  padding: 2rem 1rem;
+  display: grid;
+  gap: 1rem;
+  justify-items: center;
+}
+
+.dashboardList {
+  list-style: none;
+  display: grid;
+  gap: 0.75rem;
+  padding: 0;
+  margin: 0;
+}
+
+.dashboardCard {
+  border: 1px solid #c7d8da;
+  border-radius: 10px;
+  padding: 0.85rem;
+  display: grid;
+  gap: 0.75rem;
+  background: #fcfefe;
+}
+
+.dashboardCardBody {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.dashboardCardBody strong {
+  font-size: 1.15rem;
+}
+
+.dashboardMeta {
+  color: #44545e;
+  font-size: 0.9rem;
+}
+
+.dashboardActions {
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: 1fr 1fr;
+}
+
+@media (min-width: 640px) {
+  .dashboardActions {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.screenOnly {
+  display: contents;
+}
+
+.printDocument {
+  display: none;
+}
+
+.printBrand {
+  font-size: 1.5rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.printSubtitle,
+.printMeta,
+.printLabel {
+  color: #44545e;
+}
+
+.printLabel {
+  display: block;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 700;
+  margin-bottom: 0.15rem;
+}
+
+.printJobTitle {
+  font-size: 1.6rem;
+  margin: 0.5rem 0 0.75rem;
+}
+
+.printJobGrid,
+.printTotalsGrid {
+  display: grid;
+  gap: 0.65rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.printNotes {
+  margin-top: 0.75rem;
+}
+
+.printTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+  margin-top: 0.4rem;
+}
+
+.printTable th,
+.printTable td {
+  border: 1px solid #bbb;
+  padding: 0.35rem 0.45rem;
+  text-align: left;
+}
+
+.printTable th {
+  background: #f0f0f0;
+}
+
+.printSvg {
+  width: 100%;
+  height: auto;
+  border: 1px solid #ccc;
+}
+
+.printWarnings {
+  color: #7a2416;
+}
+
+.printFooter {
+  margin-top: 1rem;
+  font-size: 0.8rem;
+  color: #667;
+}
+
 @media print {
+  @page {
+    size: letter;
+    margin: 0.5in;
+  }
+
   .page {
     padding: 0;
     background: #ffffff;
   }
 
-  .panel {
-    break-inside: avoid;
-    border-color: #b6b6b6;
+  .screenOnly,
+  .dashboardOverlay,
+  .page button {
+    display: none !important;
   }
 
-  .page button {
-    display: none;
+  .printDocument {
+    display: block !important;
+    color: #111;
+  }
+
+  .printHeader {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    border-bottom: 2px solid #111;
+    padding-bottom: 0.5rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .printDrawingBlock,
+  .printRunsBlock,
+  .printTotalsBlock,
+  .printMaterialBlock,
+  .printJobBlock,
+  .printWarnings {
+    break-inside: avoid;
+    margin-top: 0.85rem;
+  }
+
+  .printDrawingBlock h2,
+  .printRunsBlock h2,
+  .printTotalsBlock h2,
+  .printMaterialBlock h2,
+  .printWarnings h2 {
+    font-size: 1rem;
+    margin-bottom: 0.35rem;
   }
 }
