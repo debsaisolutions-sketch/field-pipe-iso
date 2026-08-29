@@ -9,13 +9,19 @@ export const PSP_MSG = {
   SESSION_CLEARED: "PSP_SESSION_CLEARED",
 };
 
+const PARENT_SOURCES = new Set(["pipesketchpro-site", "tradedeskpro-dashboard"]);
+
 function parseAllowedOrigins() {
   const raw = process.env.NEXT_PUBLIC_ALLOWED_PARENT_ORIGINS || "";
   const defaults = [
     "https://pipesketchpro.com",
     "https://www.pipesketchpro.com",
+    "https://www.tradedeskpro.com",
+    "https://tradedeskpro.com",
     "http://localhost:3001",
     "http://127.0.0.1:3001",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
   ];
   const fromEnv = raw
     .split(",")
@@ -53,7 +59,7 @@ export function subscribeParentAuth({ onSession }) {
   const handler = (event) => {
     if (!isAllowedParentOrigin(event.origin)) return;
     const data = event.data;
-    if (!data || data.source !== "pipesketchpro-site") return;
+    if (!data || !PARENT_SOURCES.has(data.source)) return;
 
     if (data.type === PSP_MSG.SESSION) {
       onSession(data.session || null, {
