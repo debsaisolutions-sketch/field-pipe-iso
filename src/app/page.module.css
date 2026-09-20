@@ -228,6 +228,16 @@
   font-size: 0.95rem;
 }
 
+.unverifiedDefaultNote {
+  margin: 0.45rem 0 0.75rem;
+  padding: 0.4rem 0.65rem;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  color: #3d4a4c;
+  background: #f4f7f7;
+  border-left: 3px solid #8aa0a2;
+}
+
 .categoryRow {
   display: flex;
   flex-wrap: wrap;

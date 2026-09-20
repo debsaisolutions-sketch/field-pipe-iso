@@ -122,6 +122,24 @@ export const HVAC_TAKEOFF_TABLE = buildHvacTakeoffTable();
 export const ELECTRICAL_TAKEOFF_TABLE = buildElectricalTakeoffTable();
 export const PLUMBING_TAKEOFF_TABLE = buildPlumbingTakeoffTable();
 
+const UNVERIFIED_DEFAULT_LABEL =
+  "Unverified default — confirm against your manufacturer/company chart.";
+
+/** Metadata only. Does not change takeoff math. */
+function verificationMeta(partial) {
+  return {
+    sourceType: "unverified",
+    sourceName: "",
+    sourceUrl: "",
+    manufacturer: "",
+    chartVersion: "",
+    verifiedAt: null,
+    usesUnverifiedNumericDefaults: false,
+    unverifiedLabel: "",
+    ...partial,
+  };
+}
+
 const PIPE_FITTING_DEFS = FITTING_TYPES.map((id) => ({
   id,
   columnLabel: FITTING_COLUMN_LABELS[id],
@@ -145,6 +163,13 @@ export const TAKEOFF_PRESETS = {
     fittings: PIPE_FITTING_DEFS,
     fittingIds: FITTING_TYPES,
     takeoffTable: DEFAULT_TAKEOFF_TABLE,
+    verification: verificationMeta({
+      sourceType: "company_custom",
+      sourceName:
+        "In-repo Blue Book elbow formulas for 90° (size × 1.5) and 45° (size × 0.625). Other fittings are company table defaults.",
+      chartVersion: "src/lib/takeoff.js Blue Book comment",
+      usesUnverifiedNumericDefaults: false,
+    }),
     ninetyFittingId: "90 elbow",
     categories: [],
     defaultCategories: {},
@@ -198,6 +223,11 @@ export const TAKEOFF_PRESETS = {
     fittings: HVAC_FITTINGS,
     fittingIds: HVAC_FITTINGS.map((f) => f.id),
     takeoffTable: HVAC_TAKEOFF_TABLE,
+    verification: verificationMeta({
+      sourceType: "unverified",
+      usesUnverifiedNumericDefaults: true,
+      unverifiedLabel: UNVERIFIED_DEFAULT_LABEL,
+    }),
     ninetyFittingId: "90 elbow",
     categories: [
       { id: "duct", label: "Duct", defaultOn: true },
@@ -263,6 +293,11 @@ export const TAKEOFF_PRESETS = {
     fittings: ELECTRICAL_FITTINGS,
     fittingIds: ELECTRICAL_FITTINGS.map((f) => f.id),
     takeoffTable: ELECTRICAL_TAKEOFF_TABLE,
+    verification: verificationMeta({
+      sourceType: "unverified",
+      usesUnverifiedNumericDefaults: true,
+      unverifiedLabel: UNVERIFIED_DEFAULT_LABEL,
+    }),
     ninetyFittingId: "90 bend",
     conduitTypes: CONDUIT_TYPES,
     categories: [
@@ -328,6 +363,11 @@ export const TAKEOFF_PRESETS = {
     fittings: PLUMBING_FITTINGS,
     fittingIds: PLUMBING_FITTINGS.map((f) => f.id),
     takeoffTable: PLUMBING_TAKEOFF_TABLE,
+    verification: verificationMeta({
+      sourceType: "unverified",
+      usesUnverifiedNumericDefaults: true,
+      unverifiedLabel: UNVERIFIED_DEFAULT_LABEL,
+    }),
     ninetyFittingId: "90 elbow",
     categories: [
       { id: "water", label: "Water / Supply", defaultOn: true },
@@ -383,6 +423,12 @@ export const TAKEOFF_PRESETS = {
     fittings: [],
     fittingIds: [],
     takeoffTable: {},
+    verification: verificationMeta({
+      sourceType: "company_custom",
+      sourceName: "Editable field assumptions plus deterministic count formulas.",
+      hiddenAssumptionNote:
+        "Sheathing opening heights (7 ft door / 4 ft window) are built-in and unverified — not shown as editable fields.",
+    }),
     categories: [],
     defaultCategories: {},
     headerTagline: "Wall-framing takeoff for studs, plates, and opening extras.",
@@ -416,6 +462,10 @@ export const TAKEOFF_PRESETS = {
     fittings: [],
     fittingIds: [],
     takeoffTable: {},
+    verification: verificationMeta({
+      sourceType: "company_custom",
+      sourceName: "Editable area inputs. Tape factor is an unlabeled-source estimate.",
+    }),
     categories: [],
     defaultCategories: {},
     headerTagline: "Drywall sheet takeoff from wall/ceiling area and waste.",
@@ -449,6 +499,11 @@ export const TAKEOFF_PRESETS = {
     fittings: [],
     fittingIds: [],
     takeoffTable: {},
+    verification: verificationMeta({
+      sourceType: "math",
+      sourceName:
+        "Volume = L×W×D; cubic yards = cf ÷ 27. Brick/CMU defaults are editable estimates.",
+    }),
     categories: [],
     defaultCategories: {},
     headerTagline: "Concrete volume and simple CMU/brick counts from dimensions.",

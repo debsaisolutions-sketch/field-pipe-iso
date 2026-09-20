@@ -1102,6 +1102,12 @@ export default function Home() {
               {preset.showTakeoffChart ? (
                 <>
                   {preset.chartNote ? <p className={styles.helperNote}>{preset.chartNote}</p> : null}
+                  {preset.verification?.usesUnverifiedNumericDefaults ? (
+                    <p className={styles.unverifiedDefaultNote} role="note">
+                      {preset.verification.unverifiedLabel ||
+                        "Unverified default — confirm against your manufacturer/company chart."}
+                    </p>
+                  ) : null}
                   <div className={styles.takeoffTableWrap}>
                     <table className={styles.takeoffTable}>
                       <thead>

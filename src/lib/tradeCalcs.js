@@ -113,6 +113,8 @@ export function calculateFraming(inputs) {
     doors * nonNegative(inputs.doorWidth) + windows * nonNegative(inputs.windowWidth)
   );
 
+  // Unverified hidden defaults (not editable in the form): door height 7 ft, window height 4 ft.
+  // Used only for optional sheathing area, not stud counts.
   const openingArea =
     doors * nonNegative(inputs.doorWidth) * Math.min(wallHeightFt, 7) +
     windows * nonNegative(inputs.windowWidth) * 4;

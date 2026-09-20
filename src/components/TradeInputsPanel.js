@@ -175,6 +175,10 @@ export default function TradeInputsPanel({ takeoffType, inputs, onChange }) {
           />
           Include sheathing estimate (4x8 sheets)
         </label>
+        <p className={styles.unverifiedDefaultNote} role="note">
+          Sheathing opening heights (7 ft door / 4 ft window) are built-in and unverified — not
+          shown as editable fields.
+        </p>
       </section>
     );
   }
