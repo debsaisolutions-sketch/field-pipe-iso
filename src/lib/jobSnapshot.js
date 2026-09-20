@@ -1,4 +1,7 @@
-import { EMPTY_FITTING_COUNTS } from "./constants";
+import { EMPTY_FITTING_COUNTS, emptyFittingCounts } from "./constants";
+import { getPreset } from "./takeoffPresets";
+import { createDefaultTradeInputs } from "./tradeCalcs";
+import { normalizeTakeoffType } from "./takeoffTypes";
 
 export function createEmptyJobMeta() {
   return {
@@ -33,6 +36,12 @@ export function createDefaultCalculatorRuns() {
   ];
 }
 
+function readTakeoffTypeFromRow(row, calc = {}, fittings = {}) {
+  return normalizeTakeoffType(
+    row.takeoff_type || calc.takeoff_type || fittings.takeoff_type
+  );
+}
+
 /** Snapshot of the full editor state for cloud / local persistence. */
 export function buildJobSnapshot(state) {
   const {
@@ -53,8 +62,13 @@ export function buildJobSnapshot(state) {
     overallMaterialFittings,
     calculatorRuns,
     takeoffTable,
+    takeoffType,
+    categories,
+    tradeInputs,
+    conduitType,
   } = state;
   const now = new Date().toISOString();
+  const resolvedType = normalizeTakeoffType(takeoffType);
   return {
     id: id || null,
     job_name: (job.name || "").trim(),
@@ -63,11 +77,13 @@ export function buildJobSnapshot(state) {
     job_date: job.date || null,
     notes: (job.notes || "").trim(),
     pipe_size: pipeSize,
+    takeoff_type: resolvedType,
     segments,
     fittings: {
       extraFittings,
       materialSource,
       overallMaterialFittings,
+      takeoff_type: resolvedType,
     },
     calculator_state: {
       overallLength,
@@ -77,6 +93,10 @@ export function buildJobSnapshot(state) {
       calculatorRuns,
       overallSketchMode,
       overallSketchLength,
+      takeoff_type: resolvedType,
+      categories: categories || {},
+      trade_inputs: tradeInputs || createDefaultTradeInputs(),
+      conduit_type: conduitType || "EMT",
     },
     drawing_settings: {
       rotateTurns,
@@ -102,6 +122,11 @@ export function snapshotToEditorState(row) {
   const customer =
     row.customer_name || row.customer || row.customerLocation || "";
   const location = row.job_location || row.location || "";
+  const takeoffType = readTakeoffTypeFromRow(row, calc, fittings);
+  const preset = getPreset(takeoffType);
+  const emptyCounts = emptyFittingCounts(
+    preset.fittingIds.length ? preset.fittingIds : Object.keys(EMPTY_FITTING_COUNTS)
+  );
 
   return {
     id: row.id || null,
@@ -112,19 +137,31 @@ export function snapshotToEditorState(row) {
       date: row.job_date || row.date || new Date().toISOString().slice(0, 10),
       notes: row.notes || "",
     },
-    pipeSize: row.pipe_size || '2"',
+    takeoffType,
+    categories:
+      calc.categories && typeof calc.categories === "object"
+        ? calc.categories
+        : { ...preset.defaultCategories },
+    tradeInputs: {
+      ...createDefaultTradeInputs(),
+      ...(calc.trade_inputs && typeof calc.trade_inputs === "object" ? calc.trade_inputs : {}),
+    },
+    conduitType: calc.conduit_type || "EMT",
+    pipeSize: row.pipe_size || preset.defaultSize || '2"',
     segments:
       Array.isArray(row.segments) && row.segments.length > 0
         ? row.segments
         : [createDefaultSegment()],
-    extraFittings: fittings.extraFittings || { ...EMPTY_FITTING_COUNTS },
+    extraFittings: { ...emptyCounts, ...(fittings.extraFittings || {}) },
     materialSource: fittings.materialSource || "manual",
-    overallMaterialFittings:
-      fittings.overallMaterialFittings || { ...EMPTY_FITTING_COUNTS },
+    overallMaterialFittings: {
+      ...emptyCounts,
+      ...(fittings.overallMaterialFittings || {}),
+    },
     overallLength: calc.overallLength ?? "120",
     overallUnit: calc.overallUnit || "inches",
-    overallPipeSize: calc.overallPipeSize || row.pipe_size || '2"',
-    overallFittings: calc.overallFittings || { ...EMPTY_FITTING_COUNTS },
+    overallPipeSize: calc.overallPipeSize || row.pipe_size || preset.defaultSize || '2"',
+    overallFittings: { ...emptyCounts, ...(calc.overallFittings || {}) },
     calculatorRuns:
       Array.isArray(calc.calculatorRuns) && calc.calculatorRuns.length > 0
         ? calc.calculatorRuns
@@ -140,6 +177,7 @@ export function snapshotToEditorState(row) {
 }
 
 export function rowFromSnapshot(snapshot, userId) {
+  // takeoff_type lives in calculator_state + fittings so existing psp_jobs columns work.
   return {
     user_id: userId,
     account_id: userId,
@@ -158,11 +196,17 @@ export function rowFromSnapshot(snapshot, userId) {
 }
 
 export function listItemFromRow(row) {
+  const calc =
+    row.calculator_state && typeof row.calculator_state === "object"
+      ? row.calculator_state
+      : {};
+  const fittings = row.fittings && typeof row.fittings === "object" ? row.fittings : {};
   return {
     id: row.id,
     job_name: row.job_name || "",
     customer_name: row.customer_name || "",
     job_location: row.job_location || "",
+    takeoff_type: readTakeoffTypeFromRow(row, calc, fittings),
     updated_at: row.updated_at,
     created_at: row.created_at,
     source: row._source || "cloud",

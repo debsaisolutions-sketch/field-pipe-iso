@@ -1,5 +1,6 @@
 "use client";
 
+import { TAKEOFF_TYPE_OPTIONS } from "@/lib/constants";
 import styles from "@/app/page.module.css";
 
 function formatUpdated(value) {
@@ -65,12 +66,16 @@ export default function JobDashboard({
               const subtitle = [job.customer_name, job.job_location]
                 .filter(Boolean)
                 .join(" · ");
+              const typeLabel =
+                TAKEOFF_TYPE_OPTIONS.find((option) => option.id === job.takeoff_type)?.label ||
+                "Pipe / Welding";
               const busy = busyId === job.id;
               return (
                 <li key={job.id} className={styles.dashboardCard}>
                   <div className={styles.dashboardCardBody}>
                     <strong>{job.job_name || "Untitled Job"}</strong>
                     <span>{subtitle || "No customer / location"}</span>
+                    <span className={styles.dashboardMeta}>{typeLabel}</span>
                     <span className={styles.dashboardMeta}>
                       Updated {formatUpdated(job.updated_at)}
                       {job.source === "local" ? " · Device only" : ""}

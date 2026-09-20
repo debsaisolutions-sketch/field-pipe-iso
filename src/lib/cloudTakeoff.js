@@ -1,9 +1,9 @@
 import { getSupabaseBrowserClient } from "./supabaseClient";
-import { cloneDefaultTakeoffTable, normalizeStoredTakeoffTable } from "./takeoff";
+import { wrapStandardsBlob, unwrapStandardsBlob } from "./standardsBundle";
 
 export async function loadCloudTakeoffStandards(userId) {
   const supabase = getSupabaseBrowserClient();
-  if (!supabase || !userId) return { ok: false, error: "not_ready", table: null };
+  if (!supabase || !userId) return { ok: false, error: "not_ready", table: null, bundle: null };
 
   const { data, error } = await supabase
     .from("psp_takeoff_standards")
@@ -12,20 +12,26 @@ export async function loadCloudTakeoffStandards(userId) {
     .is("account_id", null)
     .maybeSingle();
 
-  if (error) return { ok: false, error: error.message, table: null };
-  if (!data) return { ok: true, table: null, row: null };
+  if (error) return { ok: false, error: error.message, table: null, bundle: null };
+  if (!data) return { ok: true, table: null, bundle: null, row: null };
+  const bundle = unwrapStandardsBlob(data.standards);
   return {
     ok: true,
-    table: normalizeStoredTakeoffTable(data.standards),
+    table: bundle.tables.pipe,
+    bundle,
     row: data,
   };
 }
 
-export async function saveCloudTakeoffStandards(userId, table, existingId) {
+export async function saveCloudTakeoffStandards(userId, tablesOrPipe, existingId, defaultTakeoffType) {
   const supabase = getSupabaseBrowserClient();
   if (!supabase || !userId) return { ok: false, error: "not_ready" };
 
-  const standards = normalizeStoredTakeoffTable(table);
+  const tables =
+    tablesOrPipe && tablesOrPipe.pipe
+      ? tablesOrPipe
+      : { ...unwrapStandardsBlob(null).tables, pipe: tablesOrPipe };
+  const standards = wrapStandardsBlob(tables, defaultTakeoffType);
   const payload = {
     user_id: userId,
     account_id: null,
@@ -56,7 +62,7 @@ export async function saveCloudTakeoffStandards(userId, table, existingId) {
     if (error.code === "23505") {
       const existing = await loadCloudTakeoffStandards(userId);
       if (existing.row?.id) {
-        return saveCloudTakeoffStandards(userId, table, existing.row.id);
+        return saveCloudTakeoffStandards(userId, tables, existing.row.id, defaultTakeoffType);
       }
     }
     return { ok: false, error: error.message };
@@ -64,7 +70,8 @@ export async function saveCloudTakeoffStandards(userId, table, existingId) {
   return { ok: true, row: data };
 }
 
-export async function resetCloudTakeoffToDefaults(userId, existingId) {
-  const defaults = cloneDefaultTakeoffTable();
-  return saveCloudTakeoffStandards(userId, defaults, existingId);
+export async function resetCloudTakeoffToDefaults(userId, existingId, tables, defaultTakeoffType) {
+  const next = tables || unwrapStandardsBlob(null).tables;
+  return saveCloudTakeoffStandards(userId, next, existingId, defaultTakeoffType);
 }
+

@@ -1,15 +1,16 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import DimensionSummary from "@/components/DimensionSummary";
 import JobDashboard from "@/components/JobDashboard";
 import PrintDocument from "@/components/PrintDocument";
+import TakeoffTypeBar from "@/components/TakeoffTypeBar";
+import TradeInputsPanel from "@/components/TradeInputsPanel";
 import {
+  CONDUIT_TYPES,
   DIRECTION_OPTIONS,
   DIRECTION_VECTOR,
   EMPTY_FITTING_COUNTS,
-  FITTING_COLUMN_LABELS,
-  FITTING_TYPES,
-  PIPE_SIZES,
 } from "@/lib/constants";
 import { subscribeParentAuth } from "@/lib/authBridge";
 import {
@@ -22,15 +23,12 @@ import {
 } from "@/lib/cloudJobs";
 import {
   loadCloudTakeoffStandards,
-  resetCloudTakeoffToDefaults,
   saveCloudTakeoffStandards,
 } from "@/lib/cloudTakeoff";
 import { DEFAULT_PLAN, resolveFeatures } from "@/lib/features";
 import {
   buildKnownLengthFromCalculatorRun,
   buildOverallSketchPoints,
-  formatDirectionLabel,
-  formatRunLength,
   projectPoint,
   toInches,
 } from "@/lib/geometry";
@@ -48,11 +46,11 @@ import {
   markJobsMigratedForUser,
   markTakeoffMigratedForUser,
   readLocalJobsV2,
-  readLocalTakeoffTable,
+  readLocalTakeoffBundle,
   upsertLocalJobV2,
   wasJobsMigratedForUser,
   wasTakeoffMigratedForUser,
-  writeLocalTakeoffTable,
+  writeLocalTakeoffBundle,
 } from "@/lib/localStorageJobs";
 import {
   applyBridgeSession,
@@ -61,9 +59,34 @@ import {
 } from "@/lib/supabaseClient";
 import {
   cloneDefaultTakeoffTable,
-  getTakeoff,
   normalizeStoredTakeoffTable,
 } from "@/lib/takeoff";
+import {
+  fittingButtonLabel,
+  fittingColumnLabel,
+  getPreset,
+} from "@/lib/takeoffPresets";
+import {
+  computeMaterialTotals,
+  computeOverallLengthCalc,
+  computeSegmentRows,
+  filterSegmentRows,
+  formatRunDrawingLabel,
+} from "@/lib/runTakeoff";
+import { buildMaterialList } from "@/lib/materialList";
+import {
+  createDefaultTakeoffTables,
+  readDefaultTakeoffType,
+  writeDefaultTakeoffType,
+} from "@/lib/standardsBundle";
+import {
+  buildResetStateForType,
+  createDefaultSegmentForPreset,
+  hasMeaningfulTakeoffData,
+  SWITCH_WARNING,
+} from "@/lib/takeoffSwitch";
+import { createDefaultTradeInputs } from "@/lib/tradeCalcs";
+import { normalizeTakeoffType } from "@/lib/takeoffTypes";
 import styles from "./page.module.css";
 
 function newLocalJobId() {
@@ -103,7 +126,12 @@ export default function Home() {
   const [overallMaterialFittings, setOverallMaterialFittings] = useState({
     ...EMPTY_FITTING_COUNTS,
   });
-  const [takeoffTable, setTakeoffTable] = useState(() => cloneDefaultTakeoffTable());
+  const [takeoffTables, setTakeoffTables] = useState(() => createDefaultTakeoffTables());
+  const [takeoffType, setTakeoffType] = useState("pipe");
+  const [categories, setCategories] = useState({});
+  const [tradeInputs, setTradeInputs] = useState(() => createDefaultTradeInputs());
+  const [conduitType, setConduitType] = useState("EMT");
+  const [defaultTypeNote, setDefaultTypeNote] = useState("");
   const nextCalculatorRunId = useRef(2);
   const [calculatorRuns, setCalculatorRuns] = useState(() => createDefaultCalculatorRuns());
 
@@ -124,9 +152,30 @@ export default function Home() {
     features.cloudJobs && authUser?.id && supabaseConfigured
   );
 
+  const preset = getPreset(takeoffType);
+  const takeoffTable =
+    takeoffTables[takeoffType] || takeoffTables.pipe || cloneDefaultTakeoffTable();
+  const fittingTypes = preset.fittingIds.length ? preset.fittingIds : Object.keys(EMPTY_FITTING_COUNTS);
+
   useEffect(() => {
-    const stored = readLocalTakeoffTable();
-    if (stored) setTakeoffTable(stored);
+    const bundle = readLocalTakeoffBundle();
+    const pref = normalizeTakeoffType(readDefaultTakeoffType() || bundle.defaultTakeoffType);
+    // Hydrate after mount so SSR/client first paint stay aligned.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- localStorage is not available during SSR
+    setTakeoffTables(bundle.tables);
+    if (pref !== "pipe") {
+      const reset = buildResetStateForType(pref, createEmptyJobMeta());
+      setTakeoffType(reset.takeoffType);
+      setCategories(reset.categories);
+      setPipeSize(reset.pipeSize);
+      setOverallPipeSize(reset.overallPipeSize);
+      setSegments(reset.segments);
+      setExtraFittings(reset.extraFittings);
+      setOverallFittings(reset.overallFittings);
+      setOverallMaterialFittings(reset.overallMaterialFittings);
+      setTradeInputs(reset.tradeInputs);
+      setConduitType(reset.conduitType);
+    }
   }, []);
 
   useEffect(() => {
@@ -181,13 +230,24 @@ export default function Home() {
       if (resolved.companyStandards) {
         const cloudTakeoff = await loadCloudTakeoffStandards(authUser.id);
         if (cancelled) return;
-        if (cloudTakeoff.ok && cloudTakeoff.table) {
-          setTakeoffTable(cloudTakeoff.table);
-          writeLocalTakeoffTable(cloudTakeoff.table);
+        if (cloudTakeoff.ok && cloudTakeoff.bundle) {
+          setTakeoffTables(cloudTakeoff.bundle.tables);
+          writeLocalTakeoffBundle(
+            cloudTakeoff.bundle.tables,
+            cloudTakeoff.bundle.defaultTakeoffType || readDefaultTakeoffType()
+          );
           setCloudTakeoffRowId(cloudTakeoff.row?.id || null);
+          if (cloudTakeoff.bundle.defaultTakeoffType) {
+            writeDefaultTakeoffType(cloudTakeoff.bundle.defaultTakeoffType);
+          }
         } else if (!wasTakeoffMigratedForUser(authUser.id)) {
-          const localTable = readLocalTakeoffTable() || cloneDefaultTakeoffTable();
-          const saved = await saveCloudTakeoffStandards(authUser.id, localTable, null);
+          const localBundle = readLocalTakeoffBundle();
+          const saved = await saveCloudTakeoffStandards(
+            authUser.id,
+            localBundle.tables,
+            null,
+            localBundle.defaultTakeoffType || readDefaultTakeoffType()
+          );
           if (!cancelled && saved.ok) {
             setCloudTakeoffRowId(saved.row?.id || null);
             markTakeoffMigratedForUser(authUser.id);
@@ -230,92 +290,77 @@ export default function Home() {
   }, [authReady, authUser?.id, cloudEnabled, plan]);
 
   const segmentRows = useMemo(() => {
-    return segments.map((segment) => {
-      const known = Number(segment.knownLength) || 0;
-      const startTakeoff = getTakeoff(takeoffTable, pipeSize, segment.startFitting);
-      const endTakeoff = getTakeoff(takeoffTable, pipeSize, segment.endFitting);
-      const totalTakeoff = startTakeoff + endTakeoff;
-      const cutLength = Math.max(known - totalTakeoff, 0);
-      return {
-        ...segment,
-        known,
-        startTakeoff,
-        endTakeoff,
-        totalTakeoff,
-        cutLength,
-      };
-    });
+    return computeSegmentRows(segments, takeoffTable, pipeSize);
   }, [segments, pipeSize, takeoffTable]);
 
+  const visibleSegmentRows = useMemo(() => {
+    return filterSegmentRows(segmentRows, preset, categories);
+  }, [segmentRows, preset, categories]);
+
   const materialTotals = useMemo(() => {
-    if (materialSource === "overall") {
-      const fittingTotals = Object.fromEntries(
-        FITTING_TYPES.map((fitting) => [fitting, overallMaterialFittings[fitting] || 0])
-      );
-      const totalKnownLength = segmentRows.reduce((sum, segment) => sum + segment.known, 0);
-      const totalCutLength = segmentRows.reduce((sum, segment) => sum + segment.cutLength, 0);
-      const totalTakeoff = FITTING_TYPES.reduce((sum, fitting) => {
-        const count = Number(overallMaterialFittings[fitting]) || 0;
-        return sum + count * getTakeoff(takeoffTable, pipeSize, fitting);
-      }, 0);
-
-      return {
-        fittingTotals,
-        totalKnownLength,
-        totalCutLength,
-        totalTakeoff,
-      };
-    }
-
-    const fittingTotals = Object.fromEntries(
-      FITTING_TYPES.map((fitting) => [fitting, extraFittings[fitting] || 0])
-    );
-
-    for (const segment of segmentRows) {
-      if (segment.startFitting !== "none") {
-        fittingTotals[segment.startFitting] += 1;
-      }
-      if (segment.endFitting !== "none") {
-        fittingTotals[segment.endFitting] += 1;
-      }
-    }
-
-    const totalKnownLength = segmentRows.reduce((sum, segment) => sum + segment.known, 0);
-    const totalCutLength = segmentRows.reduce((sum, segment) => sum + segment.cutLength, 0);
-    const totalTakeoff = segmentRows.reduce((sum, segment) => sum + segment.totalTakeoff, 0);
-
-    return {
-      fittingTotals,
-      totalKnownLength,
-      totalCutLength,
-      totalTakeoff,
-    };
+    return computeMaterialTotals({
+      materialSource,
+      fittingTypes,
+      extraFittings,
+      overallMaterialFittings,
+      segmentRows: visibleSegmentRows,
+      takeoffTable,
+      size: pipeSize,
+    });
   }, [
     extraFittings,
-    segmentRows,
+    visibleSegmentRows,
     materialSource,
     overallMaterialFittings,
     takeoffTable,
     pipeSize,
+    fittingTypes,
   ]);
 
   const overallLengthCalc = useMemo(() => {
-    const overallInches = toInches(overallLength, overallUnit);
+    return computeOverallLengthCalc({
+      overallLength,
+      overallUnit,
+      overallSize: overallPipeSize,
+      overallFittings,
+      takeoffTable,
+      fittingTypes,
+    });
+  }, [overallLength, overallUnit, overallPipeSize, overallFittings, takeoffTable, fittingTypes]);
 
-    const totalTakeoff = FITTING_TYPES.reduce((sum, fitting) => {
-      const count = Number(overallFittings[fitting]) || 0;
-      return sum + count * getTakeoff(takeoffTable, overallPipeSize, fitting);
-    }, 0);
+  const materialList = useMemo(() => {
+    return buildMaterialList({
+      preset,
+      categories,
+      size: pipeSize,
+      conduitType,
+      materialTotals,
+      tradeInputs,
+      extraLines: {
+        flexFeet: tradeInputs.hvacFlexFeet,
+        equipmentCount: tradeInputs.hvacEquipmentCount,
+        conductorFeet: tradeInputs.conductorFeet,
+      },
+      includeZeroFittings: true,
+    });
+  }, [preset, categories, pipeSize, conduitType, materialTotals, tradeInputs]);
 
-    const straightCutLength = overallInches - totalTakeoff;
-
-    return {
-      overallInches,
-      totalTakeoff,
-      straightCutLength,
-      isNonPositive: straightCutLength <= 0,
-    };
-  }, [overallLength, overallUnit, overallPipeSize, overallFittings, takeoffTable]);
+  const printMaterialList = useMemo(() => {
+    return buildMaterialList({
+      preset,
+      categories,
+      size: pipeSize,
+      conduitType,
+      materialTotals,
+      tradeInputs,
+      extraLines: {
+        flexFeet: tradeInputs.hvacFlexFeet,
+        equipmentCount: tradeInputs.hvacEquipmentCount,
+        conductorFeet: tradeInputs.conductorFeet,
+      },
+      includeZeroFittings: false,
+    });
+  }, [preset, categories, pipeSize, conduitType, materialTotals, tradeInputs]);
 
   const calculatorRunTotals = useMemo(() => {
     const totalInches = calculatorRuns.reduce(
@@ -376,29 +421,37 @@ export default function Home() {
   }, [segmentRows, rotateTurns, flipped, overallSketchMode, overallSketchLength]);
 
   const printWarnings = useMemo(() => {
-    const warnings = [];
-    if (overallLengthCalc.isNonPositive) {
+    const warnings = [...(materialList.warnings || [])];
+    if (preset.layout === "runs" && overallLengthCalc.isNonPositive) {
       warnings.push(
         "Estimated straight cut length from the overall calculator is zero or negative."
       );
     }
-    for (const segment of segmentRows) {
-      if (segment.known > 0 && segment.cutLength <= 0) {
-        warnings.push(
-          `${segment.label || "A run"} has takeoff greater than or equal to known length.`
-        );
+    if (preset.layout === "runs") {
+      for (const segment of segmentRows) {
+        if (segment.known > 0 && segment.cutLength <= 0) {
+          warnings.push(
+            `${segment.label || "A run"} has takeoff greater than or equal to known length.`
+          );
+        }
       }
     }
     return warnings;
-  }, [overallLengthCalc.isNonPositive, segmentRows]);
+  }, [overallLengthCalc.isNonPositive, segmentRows, materialList.warnings, preset.layout]);
 
   function updateJobField(field, value) {
     setJob((prev) => ({ ...prev, [field]: value }));
   }
 
   function applyEditorState(state) {
+    const type = normalizeTakeoffType(state.takeoffType);
+    const nextPreset = getPreset(type);
     setCurrentJobId(state.id || null);
     setJob(state.job);
+    setTakeoffType(type);
+    setCategories(state.categories || { ...nextPreset.defaultCategories });
+    setTradeInputs(state.tradeInputs || createDefaultTradeInputs());
+    setConduitType(state.conduitType || "EMT");
     setPipeSize(state.pipeSize);
     setSegments(state.segments);
     setExtraFittings(state.extraFittings || { ...EMPTY_FITTING_COUNTS });
@@ -413,8 +466,16 @@ export default function Home() {
     setOverallSketchLength(Number(state.overallSketchLength) || 0);
     setRotateTurns(Number(state.rotateTurns) || 0);
     setFlipped(Boolean(state.flipped));
-    if (state.takeoffSnapshot) {
-      setTakeoffTable(normalizeStoredTakeoffTable(state.takeoffSnapshot));
+    if (state.takeoffSnapshot && type === "pipe") {
+      setTakeoffTables((prev) => ({
+        ...prev,
+        pipe: normalizeStoredTakeoffTable(state.takeoffSnapshot),
+      }));
+    } else if (state.takeoffSnapshot && nextPreset.showTakeoffChart) {
+      setTakeoffTables((prev) => ({
+        ...prev,
+        [type]: state.takeoffSnapshot,
+      }));
     }
     const maxRunNum = (state.calculatorRuns || []).reduce((max, run) => {
       const match = String(run.id || "").match(/run-(\d+)/);
@@ -423,24 +484,51 @@ export default function Home() {
     nextCalculatorRunId.current = maxRunNum + 1;
   }
 
+  function applyTypeReset(nextType, { skipConfirm = false } = {}) {
+    if (
+      !skipConfirm &&
+      hasMeaningfulTakeoffData(
+        {
+          segments,
+          extraFittings,
+          overallFittings,
+          calculatorRuns,
+          tradeInputs,
+        },
+        preset
+      )
+    ) {
+      if (!window.confirm(SWITCH_WARNING)) return false;
+    }
+    const reset = buildResetStateForType(nextType, job);
+    setTakeoffType(reset.takeoffType);
+    setCategories(reset.categories);
+    setPipeSize(reset.pipeSize);
+    setOverallPipeSize(reset.overallPipeSize);
+    setSegments(reset.segments);
+    setExtraFittings(reset.extraFittings);
+    setOverallFittings(reset.overallFittings);
+    setOverallMaterialFittings(reset.overallMaterialFittings);
+    setMaterialSource(reset.materialSource);
+    setCalculatorRuns(reset.calculatorRuns);
+    setOverallLength(reset.overallLength);
+    setOverallUnit(reset.overallUnit);
+    setOverallSketchMode(reset.overallSketchMode);
+    setOverallSketchLength(reset.overallSketchLength);
+    setRotateTurns(reset.rotateTurns);
+    setFlipped(reset.flipped);
+    setTradeInputs(reset.tradeInputs);
+    setConduitType(reset.conduitType);
+    nextCalculatorRunId.current = 2;
+    return true;
+  }
+
   function resetEditorToBlank() {
+    const pref = readDefaultTakeoffType() || "pipe";
+    const reset = buildResetStateForType(pref, createEmptyJobMeta());
     applyEditorState({
+      ...reset,
       id: null,
-      job: createEmptyJobMeta(),
-      pipeSize: '2"',
-      segments: [createDefaultSegment()],
-      extraFittings: { ...EMPTY_FITTING_COUNTS },
-      materialSource: "manual",
-      overallMaterialFittings: { ...EMPTY_FITTING_COUNTS },
-      overallLength: "120",
-      overallUnit: "inches",
-      overallPipeSize: '2"',
-      overallFittings: { ...EMPTY_FITTING_COUNTS },
-      calculatorRuns: createDefaultCalculatorRuns(),
-      overallSketchMode: "none",
-      overallSketchLength: 0,
-      rotateTurns: 0,
-      flipped: false,
       takeoffSnapshot: null,
     });
     nextCalculatorRunId.current = 2;
@@ -466,6 +554,10 @@ export default function Home() {
       overallMaterialFittings,
       calculatorRuns,
       takeoffTable,
+      takeoffType,
+      categories,
+      tradeInputs,
+      conduitType,
     });
   }
 
@@ -542,13 +634,15 @@ export default function Home() {
     setSaveStatus("");
   }
 
-  async function persistTakeoffTable(nextTable) {
-    writeLocalTakeoffTable(nextTable);
+  async function persistTakeoffTables(nextTables) {
+    const pref = readDefaultTakeoffType() || takeoffType;
+    writeLocalTakeoffBundle(nextTables, pref);
     if (cloudEnabled && features.companyStandards && authUser?.id) {
       const saved = await saveCloudTakeoffStandards(
         authUser.id,
-        nextTable,
-        cloudTakeoffRowId
+        nextTables,
+        cloudTakeoffRowId,
+        pref
       );
       if (saved.ok && saved.row?.id) {
         setCloudTakeoffRowId(saved.row.id);
@@ -559,39 +653,34 @@ export default function Home() {
   function updateTakeoffCell(size, fitting, rawValue) {
     const num = rawValue === "" ? 0 : Number(rawValue);
     if (!Number.isFinite(num) || num < 0) return;
-    setTakeoffTable((prev) => {
-      const next = {
+    setTakeoffTables((prev) => {
+      const current = prev[takeoffType] || prev.pipe;
+      const nextTables = {
         ...prev,
-        [size]: { ...prev[size], [fitting]: num },
+        [takeoffType]: {
+          ...current,
+          [size]: { ...current[size], [fitting]: num },
+        },
       };
-      persistTakeoffTable(next);
-      return next;
+      persistTakeoffTables(nextTables);
+      return nextTables;
     });
   }
 
   async function resetTakeoffsToDefaults() {
-    const next = cloneDefaultTakeoffTable();
-    setTakeoffTable(next);
-    writeLocalTakeoffTable(next);
-    if (cloudEnabled && features.companyStandards && authUser?.id) {
-      const saved = await resetCloudTakeoffToDefaults(authUser.id, cloudTakeoffRowId);
-      if (saved.ok && saved.row?.id) {
-        setCloudTakeoffRowId(saved.row.id);
-      }
-    }
+    const defaults = createDefaultTakeoffTables();
+    const nextTables = {
+      ...takeoffTables,
+      [takeoffType]: defaults[takeoffType] || defaults.pipe,
+    };
+    setTakeoffTables(nextTables);
+    await persistTakeoffTables(nextTables);
   }
 
   function addPipeRun() {
     setSegments((prev) => [
       ...prev,
-      {
-        id: Date.now(),
-        label: `Run ${prev.length + 1}`,
-        knownLength: "",
-        direction: "east",
-        startFitting: "none",
-        endFitting: "none",
-      },
+      createDefaultSegmentForPreset(preset, Date.now(), prev.length),
     ]);
   }
 
@@ -658,10 +747,31 @@ export default function Home() {
     window.print();
   }
 
+  function handleTakeoffTypeChange(nextType) {
+    if (nextType === takeoffType) return;
+    applyTypeReset(nextType);
+  }
+
+  function handleToggleCategory(categoryId) {
+    setCategories((prev) => ({
+      ...prev,
+      [categoryId]: prev[categoryId] === false,
+    }));
+  }
+
+  async function handleSaveDefaultType() {
+    writeDefaultTakeoffType(takeoffType);
+    writeLocalTakeoffBundle(takeoffTables, takeoffType);
+    if (cloudEnabled && features.companyStandards && authUser?.id) {
+      await saveCloudTakeoffStandards(authUser.id, takeoffTables, cloudTakeoffRowId, takeoffType);
+    }
+    setDefaultTypeNote(`Default saved: ${preset.displayName} (this device${cloudEnabled ? " + account standards" : ""})`);
+  }
+
   function buildDrawingFromOverallLength() {
     const straightCutLength = Math.max(overallLengthCalc.straightCutLength, 0);
     const straightCutLengthString = straightCutLength.toFixed(2);
-    const ninetyCount = Number(overallFittings["90 elbow"]) || 0;
+    const ninetyCount = Number(overallFittings[preset.ninetyFittingId || "90 elbow"]) || 0;
 
     setPipeSize(overallPipeSize);
     const runsWithLength = calculatorRuns.filter((run) => Number(run.length) > 0);
@@ -669,7 +779,7 @@ export default function Home() {
     if (runsWithLength.length > 0) {
       setSegments(
         runsWithLength.map((run, index) => ({
-          id: Date.now() + index,
+          ...createDefaultSegmentForPreset(preset, Date.now() + index, index),
           label: run.label || `Run ${index + 1}`,
           knownLength: buildKnownLengthFromCalculatorRun(run.length, run.unit),
           direction: run.direction || "east",
@@ -706,7 +816,7 @@ export default function Home() {
     }
 
     const exactOverallFittings = Object.fromEntries(
-      FITTING_TYPES.map((fitting) => [fitting, Number(overallFittings[fitting]) || 0])
+      fittingTypes.map((fitting) => [fitting, Number(overallFittings[fitting]) || 0])
     );
     setOverallMaterialFittings(exactOverallFittings);
     setMaterialSource("overall");
@@ -857,7 +967,8 @@ export default function Home() {
             <div>
               <h1>PipeSketchPro</h1>
               <p>
-                Simple field takeoff for pipe runs, fittings, and print-ready isometric output.
+                {preset.headerTagline ||
+                  "Simple field takeoff for pipe runs, fittings, and print-ready isometric output."}
               </p>
             </div>
             <div className={styles.headerActions}>
@@ -968,99 +1079,173 @@ export default function Home() {
               </div>
             </section>
 
+            <TakeoffTypeBar
+              takeoffType={takeoffType}
+              preset={preset}
+              categories={categories}
+              onTypeChange={handleTakeoffTypeChange}
+              onToggleCategory={handleToggleCategory}
+              onSaveDefault={handleSaveDefaultType}
+              defaultSaved={defaultTypeNote}
+            />
+
             <section className={`${styles.panel} ${styles.takeoffSettingsPanel}`}>
               <h2>Takeoff Settings</h2>
               <p className={styles.helpText}>
-                Default takeoff values are starter estimates only. Takeoff values can vary by fitting
-                type, radius, schedule, manufacturer, and company field rules. Verify and adjust these
-                values for your job.
+                {preset.terminology.takeoffChartHelp}
               </p>
               <p className={styles.localOnlyNote}>
                 {cloudEnabled && features.companyStandards
                   ? "Standards sync to your account and stay cached on this device."
                   : "Takeoff values are stored on this device."}
               </p>
-              <div className={styles.takeoffTableWrap}>
-                <table className={styles.takeoffTable}>
-                  <thead>
-                    <tr>
-                      <th scope="col">Size</th>
-                      {FITTING_TYPES.map((fitting) => (
-                        <th key={fitting} scope="col" title={fitting}>
-                          {FITTING_COLUMN_LABELS[fitting]}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {PIPE_SIZES.map((size) => (
-                      <tr key={size}>
-                        <th scope="row">{size}</th>
-                        {FITTING_TYPES.map((fitting) => (
-                          <td key={fitting}>
-                            <input
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              aria-label={`${size} ${fitting} takeoff inches`}
-                              value={takeoffTable[size][fitting]}
-                              onChange={(event) =>
-                                updateTakeoffCell(size, fitting, event.target.value)
-                              }
-                            />
-                          </td>
+              {preset.showTakeoffChart ? (
+                <>
+                  {preset.chartNote ? <p className={styles.helperNote}>{preset.chartNote}</p> : null}
+                  <div className={styles.takeoffTableWrap}>
+                    <table className={styles.takeoffTable}>
+                      <thead>
+                        <tr>
+                          <th scope="col">Size</th>
+                          {fittingTypes.map((fitting) => (
+                            <th key={fitting} scope="col" title={fitting}>
+                              {fittingColumnLabel(preset, fitting)}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {preset.sizes.map((size) => (
+                          <tr key={size}>
+                            <th scope="row">{size}</th>
+                            {fittingTypes.map((fitting) => (
+                              <td key={fitting}>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="0.01"
+                                  aria-label={`${size} ${fitting} takeoff inches`}
+                                  value={takeoffTable[size]?.[fitting] ?? 0}
+                                  onChange={(event) =>
+                                    updateTakeoffCell(size, fitting, event.target.value)
+                                  }
+                                />
+                              </td>
+                            ))}
+                          </tr>
                         ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <button
-                className={styles.secondaryActionBtn}
-                type="button"
-                onClick={resetTakeoffsToDefaults}
-              >
-                Reset to Defaults
-              </button>
+                      </tbody>
+                    </table>
+                  </div>
+                  <button
+                    className={styles.secondaryActionBtn}
+                    type="button"
+                    onClick={resetTakeoffsToDefaults}
+                  >
+                    Reset to Defaults
+                  </button>
+                </>
+              ) : (
+                <p className={styles.helperNote}>
+                  This takeoff type uses the assumption fields in the inputs panel instead of a
+                  fitting takeoff chart.
+                </p>
+              )}
             </section>
 
+            {preset.showFittingButtons ? (
             <section className={`${styles.panel} ${styles.fittingsPanel}`}>
-              <h2>Fittings</h2>
+              <h2>{preset.terminology.fittingsTitle}</h2>
               <p className={styles.helpText}>
-                Quick-add extra fittings not already assigned to run starts/ends.
+                {preset.terminology.fittingsHelp}
               </p>
               <div className={styles.fitButtons}>
-                {FITTING_TYPES.map((fitting) => (
+                {fittingTypes.map((fitting) => (
                   <button key={fitting} onClick={() => addFittingQuick(fitting)} type="button">
-                    {fitting === "90 elbow"
-                      ? "Add 90"
-                      : fitting === "45 elbow"
-                        ? "Add 45"
-                        : `Add ${fitting}`}
+                    {fittingButtonLabel(preset, fitting)}
                   </button>
                 ))}
               </div>
             </section>
+            ) : null}
 
+            {preset.showRuns ? (
             <section className={`${styles.panel} ${styles.pipeRunsPanel}`}>
-              <h2>Pipe & Runs</h2>
+              <h2>{preset.terminology.runsTitle}</h2>
               <p className={styles.helpText}>
-                Use this section if you already know each run length and direction. You can enter
-                runs here manually.
+                {preset.terminology.runsHelp}
               </p>
               <label className={styles.inlineLabel}>
-                Pipe Size
+                {preset.terminology.sizeLabel}
                 <select value={pipeSize} onChange={(event) => setPipeSize(event.target.value)}>
-                  {PIPE_SIZES.map((size) => (
+                  {preset.sizes.map((size) => (
                     <option key={size} value={size}>
                       {size}
                     </option>
                   ))}
                 </select>
               </label>
+              {takeoffType === "electrical" ? (
+                <label className={styles.inlineLabel}>
+                  Conduit Type
+                  <select value={conduitType} onChange={(event) => setConduitType(event.target.value)}>
+                    {CONDUIT_TYPES.map((type) => (
+                      <option key={type} value={type}>
+                        {type}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+              {takeoffType === "hvac" ? (
+                <div className={styles.runFields}>
+                  <label>
+                    Flex duct (ft)
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={tradeInputs.hvacFlexFeet}
+                      onChange={(event) =>
+                        setTradeInputs((prev) => ({ ...prev, hvacFlexFeet: event.target.value }))
+                      }
+                    />
+                  </label>
+                  {categories.equipment ? (
+                    <label>
+                      Equipment count
+                      <input
+                        type="number"
+                        min="0"
+                        step="1"
+                        value={tradeInputs.hvacEquipmentCount}
+                        onChange={(event) =>
+                          setTradeInputs((prev) => ({
+                            ...prev,
+                            hvacEquipmentCount: event.target.value,
+                          }))
+                        }
+                      />
+                    </label>
+                  ) : null}
+                </div>
+              ) : null}
+              {takeoffType === "electrical" && categories.conductors !== false ? (
+                <label className={styles.inlineLabel}>
+                  Wire / conductors (ft)
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={tradeInputs.conductorFeet}
+                    onChange={(event) =>
+                      setTradeInputs((prev) => ({ ...prev, conductorFeet: event.target.value }))
+                    }
+                  />
+                </label>
+              ) : null}
               <p className={styles.helperNote}>
-                Tip: Add each straight section as a run. Use Direction to show the next turn.
-                Example: Run 1 East + 90 elbow, Run 2 North.
+                {preset.terminology.runsTip}
               </p>
 
               <div className={styles.runList}>
@@ -1083,7 +1268,7 @@ export default function Home() {
                         />
                       </label>
                       <label>
-                        Known Length (in)
+                        {preset.terminology.knownLengthLabel}
                         <input
                           type="number"
                           min="0"
@@ -1110,7 +1295,7 @@ export default function Home() {
                         </select>
                       </label>
                       <label>
-                        Start Fitting
+                        {preset.terminology.startFittingLabel}
                         <select
                           value={segment.startFitting}
                           onChange={(event) =>
@@ -1118,7 +1303,7 @@ export default function Home() {
                           }
                         >
                           <option value="none">None</option>
-                          {FITTING_TYPES.map((type) => (
+                          {fittingTypes.map((type) => (
                             <option key={type} value={type}>
                               {type}
                             </option>
@@ -1126,7 +1311,7 @@ export default function Home() {
                         </select>
                       </label>
                       <label>
-                        End Fitting
+                        {preset.terminology.endFittingLabel}
                         <select
                           value={segment.endFitting}
                           onChange={(event) =>
@@ -1134,13 +1319,92 @@ export default function Home() {
                           }
                         >
                           <option value="none">None</option>
-                          {FITTING_TYPES.map((type) => (
+                          {fittingTypes.map((type) => (
                             <option key={type} value={type}>
                               {type}
                             </option>
                           ))}
                         </select>
                       </label>
+                      {takeoffType === "hvac" ? (
+                        <>
+                          <label>
+                            Shape
+                            <select
+                              value={segment.ductShape || "rect"}
+                              onChange={(event) =>
+                                updateSegment(segment.id, "ductShape", event.target.value)
+                              }
+                            >
+                              <option value="rect">Rectangular</option>
+                              <option value="round">Round</option>
+                            </select>
+                          </label>
+                          {(segment.ductShape || "rect") === "round" ? (
+                            <label>
+                              Diameter
+                              <input
+                                value={segment.ductDiameter || ""}
+                                onChange={(event) =>
+                                  updateSegment(segment.id, "ductDiameter", event.target.value)
+                                }
+                              />
+                            </label>
+                          ) : (
+                            <>
+                              <label>
+                                Width
+                                <input
+                                  value={segment.ductWidth || ""}
+                                  onChange={(event) =>
+                                    updateSegment(segment.id, "ductWidth", event.target.value)
+                                  }
+                                />
+                              </label>
+                              <label>
+                                Height
+                                <input
+                                  value={segment.ductHeight || ""}
+                                  onChange={(event) =>
+                                    updateSegment(segment.id, "ductHeight", event.target.value)
+                                  }
+                                />
+                              </label>
+                            </>
+                          )}
+                        </>
+                      ) : null}
+                      {takeoffType === "electrical" ? (
+                        <label>
+                          Conduit Type
+                          <select
+                            value={segment.conduitType || conduitType}
+                            onChange={(event) =>
+                              updateSegment(segment.id, "conduitType", event.target.value)
+                            }
+                          >
+                            {CONDUIT_TYPES.map((type) => (
+                              <option key={type} value={type}>
+                                {type}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      ) : null}
+                      {takeoffType === "plumbing" ? (
+                        <label>
+                          System
+                          <select
+                            value={segment.system || "water"}
+                            onChange={(event) =>
+                              updateSegment(segment.id, "system", event.target.value)
+                            }
+                          >
+                            <option value="water">Water / Supply</option>
+                            <option value="dwv">Drain / Waste / Vent</option>
+                          </select>
+                        </label>
+                      ) : null}
                     </div>
                     <div className={styles.calcRow}>
                       <span>Takeoff: {segment.totalTakeoff.toFixed(2)} in</span>
@@ -1153,18 +1417,24 @@ export default function Home() {
                 The drawing updates automatically as you add or edit runs.
               </p>
               <button className={styles.primaryBtn} onClick={addPipeRun} type="button">
-                Add Pipe Run
+                {preset.terminology.addRunLabel}
               </button>
             </section>
+            ) : (
+              <TradeInputsPanel
+                takeoffType={takeoffType}
+                inputs={tradeInputs}
+                onChange={setTradeInputs}
+              />
+            )}
           </div>
 
           <div className={styles.rightColumn}>
+            {preset.showOverallCalculator ? (
             <section className={`${styles.panel} ${styles.overallPanel}`}>
               <h2>Overall Length Calculator</h2>
               <p className={styles.helpText}>
-                Use this section if you know the total overall length first. Add run breakdowns here,
-                then click Build Drawing From Overall Length to fill the Pipe & Runs section
-                automatically.
+                {preset.terminology.overallHelp}
               </p>
 
               <div className={styles.runFields}>
@@ -1189,12 +1459,12 @@ export default function Home() {
                   </select>
                 </label>
                 <label>
-                  Pipe Size
+                  {preset.terminology.overallSizeLabel}
                   <select
                     value={overallPipeSize}
                     onChange={(event) => setOverallPipeSize(event.target.value)}
                   >
-                    {PIPE_SIZES.map((size) => (
+                    {preset.sizes.map((size) => (
                       <option key={size} value={size}>
                         {size}
                       </option>
@@ -1291,16 +1561,16 @@ export default function Home() {
 
               <div className={styles.runList}>
                 <article className={styles.runCard}>
-                  <strong>Fitting Counts</strong>
+                  <strong>{preset.terminology.fittingCountsTitle}</strong>
                   <div className={styles.runFields}>
-                    {FITTING_TYPES.map((fitting) => (
+                    {fittingTypes.map((fitting) => (
                       <label key={fitting}>
                         {fitting}
                         <input
                           type="number"
                           min="0"
                           step="1"
-                          value={overallFittings[fitting]}
+                          value={overallFittings[fitting] ?? 0}
                           onChange={(event) =>
                             updateOverallFittingCount(fitting, event.target.value)
                           }
@@ -1315,7 +1585,7 @@ export default function Home() {
                 <p>Overall Length: {overallLengthCalc.overallInches.toFixed(2)} in</p>
                 <p>Total Fitting Takeoff: {overallLengthCalc.totalTakeoff.toFixed(2)} in</p>
                 <p>
-                  Estimated Straight Pipe Cut Length:{" "}
+                  {preset.terminology.straightCutLabel}:{" "}
                   {Math.max(overallLengthCalc.straightCutLength, 0).toFixed(2)} in
                 </p>
                 {overallLengthCalc.isNonPositive && (
@@ -1330,18 +1600,20 @@ export default function Home() {
                 type="button"
                 onClick={buildDrawingFromOverallLength}
               >
-                Build Drawing From Overall Length
+                {preset.terminology.buildDrawingLabel}
               </button>
             </section>
+            ) : null}
 
             <section className={`${styles.panel} ${styles.drawingPanel}`}>
               <div className={styles.drawingTop}>
                 <div>
-                  <h2>Drawing Preview</h2>
+                  <h2>{preset.terminology.drawingTitle}</h2>
                   <p className={styles.helpText}>
-                    Simplified field sketch for quick communication only.
+                    {preset.terminology.drawingHelp}
                   </p>
                 </div>
+                {preset.drawingMode === "iso-runs" ? (
                 <div className={styles.drawButtons}>
                   <button type="button" onClick={() => setRotateTurns((prev) => prev - 1)}>
                     Rotate Left
@@ -1365,13 +1637,21 @@ export default function Home() {
                     Export PDF
                   </button>
                 </div>
+                ) : (
+                <div className={styles.drawButtons}>
+                  <button type="button" className={styles.primaryBtn} onClick={exportPdf}>
+                    Export PDF
+                  </button>
+                </div>
+                )}
               </div>
 
+              {preset.drawingMode === "iso-runs" ? (
               <div className={styles.svgWrap}>
                 <svg
                   viewBox={`0 0 ${drawingModel.width} ${drawingModel.height}`}
                   role="img"
-                  aria-label="Pipe isometric preview"
+                  aria-label={preset.terminology.drawingAria}
                 >
                   <rect x="0" y="0" width={drawingModel.width} height={drawingModel.height} />
                   {drawingModel.points.slice(0, -1).map((point, index) => {
@@ -1388,9 +1668,9 @@ export default function Home() {
                     const readableAngle =
                       rawAngle > 90 || rawAngle < -90 ? rawAngle + 180 : rawAngle;
                     const segment = segmentRows[index];
-                    const runText = segment?.label || `Run ${index + 1}`;
-                    const lengthText = `${formatRunLength(segment?.known)} in`;
-                    const directionText = formatDirectionLabel(segment?.direction);
+                    const label = formatRunDrawingLabel(segment, index, preset, pipeSize, {
+                      conduitType,
+                    });
                     return (
                       <g key={`seg-${index}`}>
                         <line x1={point[0]} y1={point[1]} x2={next[0]} y2={next[1]} />
@@ -1401,7 +1681,7 @@ export default function Home() {
                           textAnchor="middle"
                           dominantBaseline="middle"
                         >
-                          {`${runText} • ${lengthText} • ${directionText}`}
+                          {label}
                         </text>
                       </g>
                     );
@@ -1411,16 +1691,33 @@ export default function Home() {
                   ))}
                 </svg>
               </div>
+              ) : (
+                <DimensionSummary
+                  summary={(materialList.summary || []).map((row) =>
+                    row.label ? `${row.label}: ${row.value}` : row.value
+                  )}
+                  assumptions={materialList.assumptions || []}
+                  preview={materialList.preview}
+                />
+              )}
             </section>
 
             <section className={`${styles.panel} ${styles.materialPanel}`}>
               <h2>Material List</h2>
               <div className={styles.materialSummary}>
-                <p>Pipe Size: {pipeSize}</p>
-                <p>Total Known Length: {materialTotals.totalKnownLength.toFixed(2)} in</p>
-                <p>Total Estimated Takeoff: {materialTotals.totalTakeoff.toFixed(2)} in</p>
-                <p>Total Estimated Cut Length: {materialTotals.totalCutLength.toFixed(2)} in</p>
+                {(materialList.summary || []).map((row) => (
+                  <p key={`${row.label}-${row.value}`}>
+                    {row.label ? `${row.label}: ${row.value}` : row.value}
+                  </p>
+                ))}
               </div>
+              {materialList.assumptions?.length ? (
+                <ul className={styles.assumptionList}>
+                  {materialList.assumptions.map((line) => (
+                    <li key={line}>{line}</li>
+                  ))}
+                </ul>
+              ) : null}
               <table className={styles.bomTable}>
                 <thead>
                   <tr>
@@ -1429,14 +1726,10 @@ export default function Home() {
                   </tr>
                 </thead>
                 <tbody>
-                  <tr>
-                    <td>Pipe ({pipeSize})</td>
-                    <td>{materialTotals.totalCutLength.toFixed(2)} in</td>
-                  </tr>
-                  {FITTING_TYPES.map((fitting) => (
-                    <tr key={fitting}>
-                      <td>{fitting}</td>
-                      <td>{materialTotals.fittingTotals[fitting]}</td>
+                  {(materialList.rows || []).map((row) => (
+                    <tr key={row.item}>
+                      <td>{row.item}</td>
+                      <td>{row.qty}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -1448,9 +1741,11 @@ export default function Home() {
 
       <PrintDocument
         job={job}
+        takeoffType={takeoffType}
         pipeSize={pipeSize}
-        segmentRows={segmentRows}
-        materialTotals={materialTotals}
+        conduitType={conduitType}
+        segmentRows={visibleSegmentRows}
+        materialList={printMaterialList}
         drawingModel={drawingModel}
         warnings={printWarnings}
       />

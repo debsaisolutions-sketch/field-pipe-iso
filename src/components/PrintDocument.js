@@ -1,7 +1,8 @@
 "use client";
 
-import { FITTING_TYPES } from "@/lib/constants";
-import { formatDirectionLabel, formatRunLength } from "@/lib/geometry";
+import DimensionSummary from "@/components/DimensionSummary";
+import { formatRunDrawingLabel } from "@/lib/runTakeoff";
+import { getPreset } from "@/lib/takeoffPresets";
 import styles from "@/app/page.module.css";
 
 function formatGeneratedAt(date = new Date()) {
@@ -24,24 +25,36 @@ function formatGeneratedAt(date = new Date()) {
  */
 export default function PrintDocument({
   job,
+  takeoffType = "pipe",
   pipeSize,
-  segmentRows,
-  materialTotals,
+  conduitType,
+  segmentRows = [],
+  materialList,
   drawingModel,
   warnings = [],
 }) {
+  const preset = getPreset(takeoffType);
+  const terms = preset.terminology;
   const customerLine = [job.customer, job.location].filter(Boolean).join(" · ");
   const generatedAt = formatGeneratedAt();
+  const isRunDrawing = preset.drawingMode === "iso-runs";
+  const summaryLines = (materialList?.summary || []).map((row) =>
+    row.label ? `${row.label}: ${row.value}` : row.value
+  );
+  const printRows = (materialList?.rows || []).filter((row) => {
+    const qty = String(row.qty ?? "");
+    return qty !== "0" && qty !== "0.00";
+  });
 
   return (
     <div className={styles.printDocument} aria-hidden="true">
       <header className={styles.printHeader}>
         <div>
           <p className={styles.printBrand}>PipeSketch Pro</p>
-          <p className={styles.printSubtitle}>Field-to-shop pipe isometric &amp; takeoff</p>
+          <p className={styles.printSubtitle}>{terms.printSubtitle}</p>
         </div>
         <div className={styles.printMeta}>
-          <p>Generated {generatedAt}</p>
+          <p suppressHydrationWarning>Generated {generatedAt}</p>
           <p>Crew does not need an account</p>
         </div>
       </header>
@@ -62,9 +75,18 @@ export default function PrintDocument({
             <p>{job.date || "—"}</p>
           </div>
           <div>
-            <span className={styles.printLabel}>Pipe size</span>
-            <p>{pipeSize}</p>
+            <span className={styles.printLabel}>Takeoff type</span>
+            <p>{preset.displayName}</p>
           </div>
+          {preset.layout === "runs" ? (
+            <div>
+              <span className={styles.printLabel}>{terms.printSizeLabel}</span>
+              <p>
+                {takeoffType === "electrical" && conduitType ? `${conduitType} ` : ""}
+                {pipeSize}
+              </p>
+            </div>
+          ) : null}
         </div>
         {job.notes ? (
           <div className={styles.printNotes}>
@@ -78,123 +100,144 @@ export default function PrintDocument({
       </section>
 
       <section className={styles.printDrawingBlock}>
-        <h2>Isometric drawing</h2>
-        <svg
-          viewBox={`0 0 ${drawingModel.width} ${drawingModel.height}`}
-          role="img"
-          aria-label="Pipe isometric drawing"
-          className={styles.printSvg}
-        >
-          <rect
-            x="0"
-            y="0"
-            width={drawingModel.width}
-            height={drawingModel.height}
-            fill="#fff"
-            stroke="#ccc"
-          />
-          {drawingModel.points.slice(0, -1).map((point, index) => {
-            const next = drawingModel.points[index + 1];
-            const midX = (point[0] + next[0]) / 2;
-            const midY = (point[1] + next[1]) / 2;
-            const dx = next[0] - point[0];
-            const dy = next[1] - point[1];
-            const magnitude = Math.hypot(dx, dy) || 1;
-            const offset = 14;
-            const labelX = midX + (-dy / magnitude) * offset;
-            const labelY = midY + (dx / magnitude) * offset;
-            const rawAngle = (Math.atan2(dy, dx) * 180) / Math.PI;
-            const readableAngle =
-              rawAngle > 90 || rawAngle < -90 ? rawAngle + 180 : rawAngle;
-            const segment = segmentRows[index];
-            const runText = segment?.label || `Run ${index + 1}`;
-            const lengthText = `${formatRunLength(segment?.known)} in`;
-            const directionText = formatDirectionLabel(segment?.direction);
-            return (
-              <g key={`print-seg-${index}`}>
-                <line
-                  x1={point[0]}
-                  y1={point[1]}
-                  x2={next[0]}
-                  y2={next[1]}
-                  stroke="#111"
-                  strokeWidth="2.5"
-                />
-                <text
-                  x={labelX}
-                  y={labelY}
-                  transform={`rotate(${readableAngle} ${labelX} ${labelY})`}
-                  textAnchor="middle"
-                  dominantBaseline="middle"
-                  fontSize="11"
-                  fill="#222"
-                >
-                  {`${runText} • ${lengthText} • ${directionText}`}
-                </text>
-              </g>
-            );
-          })}
-          {drawingModel.points.map((point, index) => (
-            <circle
-              key={`print-pt-${index}`}
-              cx={point[0]}
-              cy={point[1]}
-              r="3.5"
-              fill="#111"
+        <h2>{terms.printDrawingTitle}</h2>
+        {isRunDrawing && drawingModel ? (
+          <svg
+            viewBox={`0 0 ${drawingModel.width} ${drawingModel.height}`}
+            role="img"
+            aria-label={terms.drawingAria}
+            className={styles.printSvg}
+          >
+            <rect
+              x="0"
+              y="0"
+              width={drawingModel.width}
+              height={drawingModel.height}
+              fill="#fff"
+              stroke="#ccc"
             />
-          ))}
-        </svg>
-      </section>
-
-      <section className={styles.printRunsBlock}>
-        <h2>Run-by-run cut lengths</h2>
-        <table className={styles.printTable}>
-          <thead>
-            <tr>
-              <th>Run</th>
-              <th>Known (in)</th>
-              <th>Start</th>
-              <th>End</th>
-              <th>Takeoff (in)</th>
-              <th>Cut (in)</th>
-              <th>Dir</th>
-            </tr>
-          </thead>
-          <tbody>
-            {segmentRows.map((segment, index) => (
-              <tr key={segment.id || index}>
-                <td>{segment.label || `Run ${index + 1}`}</td>
-                <td>{segment.known.toFixed(2)}</td>
-                <td>{segment.startFitting === "none" ? "—" : segment.startFitting}</td>
-                <td>{segment.endFitting === "none" ? "—" : segment.endFitting}</td>
-                <td>{segment.totalTakeoff.toFixed(2)}</td>
-                <td>{segment.cutLength.toFixed(2)}</td>
-                <td>{formatDirectionLabel(segment.direction)}</td>
-              </tr>
+            {drawingModel.points.slice(0, -1).map((point, index) => {
+              const next = drawingModel.points[index + 1];
+              const midX = (point[0] + next[0]) / 2;
+              const midY = (point[1] + next[1]) / 2;
+              const dx = next[0] - point[0];
+              const dy = next[1] - point[1];
+              const magnitude = Math.hypot(dx, dy) || 1;
+              const offset = 14;
+              const labelX = midX + (-dy / magnitude) * offset;
+              const labelY = midY + (dx / magnitude) * offset;
+              const rawAngle = (Math.atan2(dy, dx) * 180) / Math.PI;
+              const readableAngle =
+                rawAngle > 90 || rawAngle < -90 ? rawAngle + 180 : rawAngle;
+              const segment = segmentRows[index];
+              const label = formatRunDrawingLabel(segment, index, preset, pipeSize, {
+                conduitType,
+              });
+              return (
+                <g key={`print-seg-${index}`}>
+                  <line
+                    x1={point[0]}
+                    y1={point[1]}
+                    x2={next[0]}
+                    y2={next[1]}
+                    stroke="#111"
+                    strokeWidth="2.5"
+                  />
+                  <text
+                    x={labelX}
+                    y={labelY}
+                    transform={`rotate(${readableAngle} ${labelX} ${labelY})`}
+                    textAnchor="middle"
+                    dominantBaseline="middle"
+                    fontSize="11"
+                    fill="#222"
+                  >
+                    {label}
+                  </text>
+                </g>
+              );
+            })}
+            {drawingModel.points.map((point, index) => (
+              <circle
+                key={`print-pt-${index}`}
+                cx={point[0]}
+                cy={point[1]}
+                r="3.5"
+                fill="#111"
+              />
             ))}
-          </tbody>
-        </table>
+          </svg>
+        ) : (
+          <DimensionSummary
+            summary={summaryLines}
+            assumptions={materialList?.assumptions || []}
+            preview={materialList?.preview}
+          />
+        )}
       </section>
 
-      <section className={styles.printTotalsBlock}>
-        <h2>Totals</h2>
-        <div className={styles.printTotalsGrid}>
-          <p>
-            <strong>Total known length:</strong>{" "}
-            {materialTotals.totalKnownLength.toFixed(2)} in
-          </p>
-          <p>
-            <strong>Total takeoff:</strong> {materialTotals.totalTakeoff.toFixed(2)} in
-          </p>
-          <p>
-            <strong>Total pipe cut length:</strong>{" "}
-            {materialTotals.totalCutLength.toFixed(2)} in
-          </p>
-        </div>
-      </section>
+      {isRunDrawing ? (
+        <section className={styles.printRunsBlock}>
+          <h2>{terms.printRunsTitle}</h2>
+          <table className={styles.printTable}>
+            <thead>
+              <tr>
+                <th>Run</th>
+                <th>Known (in)</th>
+                <th>Start</th>
+                <th>End</th>
+                <th>Takeoff (in)</th>
+                <th>Cut (in)</th>
+                <th>Dir</th>
+              </tr>
+            </thead>
+            <tbody>
+              {segmentRows.map((segment, index) => (
+                <tr key={segment.id || index}>
+                  <td>{segment.label || `Run ${index + 1}`}</td>
+                  <td>{segment.known.toFixed(2)}</td>
+                  <td>{segment.startFitting === "none" ? "—" : segment.startFitting}</td>
+                  <td>{segment.endFitting === "none" ? "—" : segment.endFitting}</td>
+                  <td>{segment.totalTakeoff.toFixed(2)}</td>
+                  <td>{segment.cutLength.toFixed(2)}</td>
+                  <td>
+                    {segment.direction
+                      ? segment.direction[0].toUpperCase() + segment.direction.slice(1)
+                      : "East"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      ) : null}
+
+      {materialList?.assumptions?.length && isRunDrawing ? (
+        <section className={styles.printTotalsBlock}>
+          <h2>Assumptions</h2>
+          <ul>
+            {materialList.assumptions.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {isRunDrawing ? (
+        <section className={styles.printTotalsBlock}>
+          <h2>Totals</h2>
+          <div className={styles.printTotalsGrid}>
+            {(materialList?.summary || []).map((row) => (
+              <p key={`${row.label}-${row.value}`}>
+                <strong>{row.label}:</strong> {row.value}
+              </p>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       <section className={styles.printMaterialBlock}>
-        <h2>Material / fitting list</h2>
+        <h2>{terms.printMaterialTitle}</h2>
         <table className={styles.printTable}>
           <thead>
             <tr>
@@ -203,20 +246,12 @@ export default function PrintDocument({
             </tr>
           </thead>
           <tbody>
-            <tr>
-              <td>Pipe ({pipeSize})</td>
-              <td>{materialTotals.totalCutLength.toFixed(2)} in</td>
-            </tr>
-            {FITTING_TYPES.map((fitting) => {
-              const qty = materialTotals.fittingTotals[fitting] || 0;
-              if (!qty) return null;
-              return (
-                <tr key={fitting}>
-                  <td>{fitting}</td>
-                  <td>{qty}</td>
-                </tr>
-              );
-            })}
+            {printRows.map((row) => (
+              <tr key={row.item}>
+                <td>{row.item}</td>
+                <td>{row.qty}</td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </section>
@@ -233,9 +268,7 @@ export default function PrintDocument({
       ) : null}
 
       <footer className={styles.printFooter}>
-        <p>
-          PipeSketch Pro · Verify takeoffs and dimensions in the field before cutting or welding.
-        </p>
+        <p>{terms.printFooter}</p>
       </footer>
     </div>
   );

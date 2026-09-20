@@ -6,7 +6,7 @@ import {
   TAKEOFF_CLOUD_MIGRATED_KEY,
   TAKEOFF_SETTINGS_STORAGE_KEY,
 } from "./constants";
-import { normalizeStoredTakeoffTable } from "./takeoff";
+import { unwrapStandardsBlob, wrapStandardsBlob } from "./standardsBundle";
 
 function safeParse(raw, fallback) {
   try {
@@ -17,20 +17,31 @@ function safeParse(raw, fallback) {
   }
 }
 
-export function readLocalTakeoffTable() {
-  if (typeof window === "undefined") return null;
+export function readLocalTakeoffBundle() {
+  if (typeof window === "undefined") return unwrapStandardsBlob(null);
   const parsed = safeParse(window.localStorage.getItem(TAKEOFF_SETTINGS_STORAGE_KEY), null);
-  if (!parsed) return null;
-  return normalizeStoredTakeoffTable(parsed);
+  return unwrapStandardsBlob(parsed);
 }
 
-export function writeLocalTakeoffTable(table) {
+export function writeLocalTakeoffBundle(tables, defaultTakeoffType) {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(TAKEOFF_SETTINGS_STORAGE_KEY, JSON.stringify(table));
+    window.localStorage.setItem(
+      TAKEOFF_SETTINGS_STORAGE_KEY,
+      JSON.stringify(wrapStandardsBlob(tables, defaultTakeoffType))
+    );
   } catch {
     // quota / private mode
   }
+}
+
+export function readLocalTakeoffTable() {
+  return readLocalTakeoffBundle().tables.pipe;
+}
+
+export function writeLocalTakeoffTable(table) {
+  const bundle = readLocalTakeoffBundle();
+  writeLocalTakeoffBundle({ ...bundle.tables, pipe: table || bundle.tables.pipe }, bundle.defaultTakeoffType);
 }
 
 /** Legacy v1 metadata-only jobs. */

@@ -8,7 +8,7 @@ export async function listCloudJobs() {
   const { data, error } = await supabase
     .from("psp_jobs")
     .select(
-      "id, job_name, customer_name, job_location, job_date, notes, pipe_size, updated_at, created_at"
+      "id, job_name, customer_name, job_location, job_date, notes, pipe_size, calculator_state, updated_at, created_at"
     )
     .order("updated_at", { ascending: false });
 

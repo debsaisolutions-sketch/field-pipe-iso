@@ -60,3 +60,30 @@ export const LOCAL_JOBS_V2_KEY = "field-pipe-iso.saved-jobs.v2";
 export const JOBS_CLOUD_MIGRATED_KEY = "field-pipe-iso.jobs-cloud-migrated.v1";
 export const TAKEOFF_CLOUD_MIGRATED_KEY = "field-pipe-iso.takeoff-cloud-migrated.v1";
 export const DRAFT_JOB_KEY = "field-pipe-iso.draft-job.v1";
+export const DEFAULT_TAKEOFF_TYPE_KEY = "field-pipe-iso.default-takeoff-type.v1";
+
+export const TAKEOFF_TYPE_IDS = [
+  "pipe",
+  "hvac",
+  "electrical",
+  "plumbing",
+  "framing",
+  "drywall",
+  "concrete",
+];
+
+export const TAKEOFF_TYPE_OPTIONS = [
+  { id: "pipe", label: "Pipe / Welding" },
+  { id: "hvac", label: "HVAC / Duct" },
+  { id: "electrical", label: "Electrical" },
+  { id: "plumbing", label: "Plumbing" },
+  { id: "framing", label: "Framing" },
+  { id: "drywall", label: "Drywall" },
+  { id: "concrete", label: "Concrete / Masonry" },
+];
+
+export const CONDUIT_TYPES = ["EMT", "PVC", "RMC", "IMC", "FMC"];
+
+export function emptyFittingCounts(fittingIds) {
+  return Object.fromEntries((fittingIds || FITTING_TYPES).map((fitting) => [fitting, 0]));
+}

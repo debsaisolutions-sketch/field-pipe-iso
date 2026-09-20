@@ -54,31 +54,35 @@
   order: 1;
 }
 
-.takeoffSettingsPanel {
+.takeoffTypePanel {
   order: 2;
+}
+
+.takeoffSettingsPanel {
+  order: 3;
   /* Allow this grid item to shrink so wide content scrolls inside the card, not the column */
   min-width: 0;
   max-width: 100%;
 }
 
 .overallPanel {
-  order: 3;
-}
-
-.fittingsPanel {
   order: 4;
 }
 
-.pipeRunsPanel {
+.fittingsPanel {
   order: 5;
 }
 
-.drawingPanel {
+.pipeRunsPanel {
   order: 6;
 }
 
-.materialPanel {
+.drawingPanel {
   order: 7;
+}
+
+.materialPanel {
+  order: 8;
 }
 
 .formGrid {
@@ -224,6 +228,65 @@
   font-size: 0.95rem;
 }
 
+.categoryRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem 1.1rem;
+  margin: 0.35rem 0 0.5rem;
+}
+
+.categoryOption {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 600;
+  margin: 0.6rem 0;
+}
+
+.categoryOption input[type="checkbox"] {
+  min-height: 18px;
+  width: 18px;
+  height: 18px;
+}
+
+.defaultTypeRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-top: 0.75rem;
+}
+
+.subHead {
+  font-size: 1.05rem;
+  margin: 1rem 0 0.6rem;
+}
+
+.assumptionList {
+  margin: 0.5rem 0 0.9rem;
+  padding-left: 1.2rem;
+  color: #44545e;
+  font-size: 0.95rem;
+}
+
+.summaryPreview {
+  margin-top: 0.5rem;
+}
+
+.summarySvg {
+  width: min(100%, 420px);
+  height: auto;
+  display: block;
+  margin-bottom: 0.75rem;
+}
+
+.summaryPreview text {
+  fill: #0f1720;
+  font-size: 13px;
+  font-weight: 600;
+}
+
 .calcRunRow {
   border: 1px solid #d5e2e3;
   border-radius: 8px;
@@ -354,28 +417,32 @@
     order: 1;
   }
 
-  .takeoffSettingsPanel {
+  .takeoffTypePanel {
     order: 2;
   }
 
-  .overallPanel {
+  .takeoffSettingsPanel {
     order: 3;
   }
 
-  .fittingsPanel {
+  .overallPanel {
     order: 4;
   }
 
-  .drawingPanel {
+  .fittingsPanel {
     order: 5;
   }
 
-  .pipeRunsPanel {
+  .drawingPanel {
     order: 6;
   }
 
-  .materialPanel {
+  .pipeRunsPanel {
     order: 7;
+  }
+
+  .materialPanel {
+    order: 8;
   }
 }
 

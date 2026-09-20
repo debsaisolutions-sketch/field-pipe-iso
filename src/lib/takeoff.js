@@ -86,6 +86,20 @@ export const DEFAULT_TAKEOFF_TABLE = {
   },
 };
 
+export function cloneTakeoffTable(sizes, fittingIds, sourceTable) {
+  return Object.fromEntries(
+    sizes.map((size) => [
+      size,
+      Object.fromEntries(
+        fittingIds.map((fitting) => {
+          const v = Number(sourceTable?.[size]?.[fitting]);
+          return [fitting, Number.isFinite(v) && v >= 0 ? v : 0];
+        })
+      ),
+    ])
+  );
+}
+
 export function cloneDefaultTakeoffTable() {
   return Object.fromEntries(
     PIPE_SIZES.map((size) => [
@@ -97,12 +111,12 @@ export function cloneDefaultTakeoffTable() {
   );
 }
 
-export function normalizeStoredTakeoffTable(raw) {
-  const out = cloneDefaultTakeoffTable();
+export function normalizeTakeoffTable(raw, sizes, fittingIds, defaults) {
+  const out = cloneTakeoffTable(sizes, fittingIds, defaults);
   if (!raw || typeof raw !== "object") return out;
-  for (const size of PIPE_SIZES) {
+  for (const size of sizes) {
     if (!raw[size] || typeof raw[size] !== "object") continue;
-    for (const fitting of FITTING_TYPES) {
+    for (const fitting of fittingIds) {
       const v = Number(raw[size][fitting]);
       if (Number.isFinite(v) && v >= 0) {
         out[size][fitting] = v;
@@ -110,6 +124,10 @@ export function normalizeStoredTakeoffTable(raw) {
     }
   }
   return out;
+}
+
+export function normalizeStoredTakeoffTable(raw) {
+  return normalizeTakeoffTable(raw, PIPE_SIZES, FITTING_TYPES, DEFAULT_TAKEOFF_TABLE);
 }
 
 export function getTakeoff(table, size, fitting) {
