@@ -27,6 +27,15 @@ import {
 } from "@/lib/cloudTakeoff";
 import { DEFAULT_PLAN, resolveFeatures } from "@/lib/features";
 import {
+  CHART_IDS,
+  emptyChartSelection,
+} from "@/lib/charts/chartTypes";
+import {
+  conduitLabelFromMaterial,
+  normalizeChartSelection,
+  resolveActiveTakeoffChart,
+} from "@/lib/charts/resolveTakeoffChart";
+import {
   buildKnownLengthFromCalculatorRun,
   buildOverallSketchPoints,
   projectPoint,
@@ -131,6 +140,7 @@ export default function Home() {
   const [categories, setCategories] = useState({});
   const [tradeInputs, setTradeInputs] = useState(() => createDefaultTradeInputs());
   const [conduitType, setConduitType] = useState("EMT");
+  const [chartSelection, setChartSelection] = useState(() => emptyChartSelection());
   const [defaultTypeNote, setDefaultTypeNote] = useState("");
   const nextCalculatorRunId = useRef(2);
   const [calculatorRuns, setCalculatorRuns] = useState(() => createDefaultCalculatorRuns());
@@ -153,8 +163,17 @@ export default function Home() {
   );
 
   const preset = getPreset(takeoffType);
+  const chartResolved = useMemo(
+    () =>
+      resolveActiveTakeoffChart({
+        takeoffType,
+        chartSelection,
+        takeoffTables,
+      }),
+    [takeoffType, chartSelection, takeoffTables]
+  );
   const takeoffTable =
-    takeoffTables[takeoffType] || takeoffTables.pipe || cloneDefaultTakeoffTable();
+    chartResolved.table || takeoffTables[takeoffType] || takeoffTables.pipe || cloneDefaultTakeoffTable();
   const fittingTypes = preset.fittingIds.length ? preset.fittingIds : Object.keys(EMPTY_FITTING_COUNTS);
 
   useEffect(() => {
@@ -163,6 +182,9 @@ export default function Home() {
     // Hydrate after mount so SSR/client first paint stay aligned.
     // eslint-disable-next-line react-hooks/set-state-in-effect -- localStorage is not available during SSR
     setTakeoffTables(bundle.tables);
+    if (bundle.chartSelection) {
+      setChartSelection(bundle.chartSelection);
+    }
     if (pref !== "pipe") {
       const reset = buildResetStateForType(pref, createEmptyJobMeta());
       setTakeoffType(reset.takeoffType);
@@ -175,6 +197,7 @@ export default function Home() {
       setOverallMaterialFittings(reset.overallMaterialFittings);
       setTradeInputs(reset.tradeInputs);
       setConduitType(reset.conduitType);
+      setChartSelection(reset.chartSelection || emptyChartSelection());
     }
   }, []);
 
@@ -232,9 +255,13 @@ export default function Home() {
         if (cancelled) return;
         if (cloudTakeoff.ok && cloudTakeoff.bundle) {
           setTakeoffTables(cloudTakeoff.bundle.tables);
+          if (cloudTakeoff.bundle.chartSelection) {
+            setChartSelection(cloudTakeoff.bundle.chartSelection);
+          }
           writeLocalTakeoffBundle(
             cloudTakeoff.bundle.tables,
-            cloudTakeoff.bundle.defaultTakeoffType || readDefaultTakeoffType()
+            cloudTakeoff.bundle.defaultTakeoffType || readDefaultTakeoffType(),
+            cloudTakeoff.bundle.chartSelection
           );
           setCloudTakeoffRowId(cloudTakeoff.row?.id || null);
           if (cloudTakeoff.bundle.defaultTakeoffType) {
@@ -246,7 +273,8 @@ export default function Home() {
             authUser.id,
             localBundle.tables,
             null,
-            localBundle.defaultTakeoffType || readDefaultTakeoffType()
+            localBundle.defaultTakeoffType || readDefaultTakeoffType(),
+            localBundle.chartSelection
           );
           if (!cancelled && saved.ok) {
             setCloudTakeoffRowId(saved.row?.id || null);
@@ -452,6 +480,11 @@ export default function Home() {
     setCategories(state.categories || { ...nextPreset.defaultCategories });
     setTradeInputs(state.tradeInputs || createDefaultTradeInputs());
     setConduitType(state.conduitType || "EMT");
+    setChartSelection(
+      state.chartSelection
+        ? normalizeChartSelection(state.chartSelection, { conduitType: state.conduitType })
+        : emptyChartSelection()
+    );
     setPipeSize(state.pipeSize);
     setSegments(state.segments);
     setExtraFittings(state.extraFittings || { ...EMPTY_FITTING_COUNTS });
@@ -519,6 +552,7 @@ export default function Home() {
     setFlipped(reset.flipped);
     setTradeInputs(reset.tradeInputs);
     setConduitType(reset.conduitType);
+    setChartSelection(reset.chartSelection || emptyChartSelection());
     nextCalculatorRunId.current = 2;
     return true;
   }
@@ -558,6 +592,7 @@ export default function Home() {
       categories,
       tradeInputs,
       conduitType,
+      chartSelection,
     });
   }
 
@@ -634,15 +669,16 @@ export default function Home() {
     setSaveStatus("");
   }
 
-  async function persistTakeoffTables(nextTables) {
+  async function persistTakeoffTables(nextTables, nextChartSelection = chartSelection) {
     const pref = readDefaultTakeoffType() || takeoffType;
-    writeLocalTakeoffBundle(nextTables, pref);
+    writeLocalTakeoffBundle(nextTables, pref, nextChartSelection);
     if (cloudEnabled && features.companyStandards && authUser?.id) {
       const saved = await saveCloudTakeoffStandards(
         authUser.id,
         nextTables,
         cloudTakeoffRowId,
-        pref
+        pref,
+        nextChartSelection
       );
       if (saved.ok && saved.row?.id) {
         setCloudTakeoffRowId(saved.row.id);
@@ -653,16 +689,34 @@ export default function Home() {
   function updateTakeoffCell(size, fitting, rawValue) {
     const num = rawValue === "" ? 0 : Number(rawValue);
     if (!Number.isFinite(num) || num < 0) return;
+
+    const needsCustom =
+      (takeoffType === "electrical" &&
+        chartSelection.electrical?.chartId !== CHART_IDS.companyCustom) ||
+      (takeoffType === "plumbing" &&
+        chartSelection.plumbing?.chartId !== CHART_IDS.companyCustom);
+
+    const nextSelection = needsCustom
+      ? normalizeChartSelection({
+          ...chartSelection,
+          [takeoffType]: { ...chartSelection[takeoffType], chartId: CHART_IDS.companyCustom },
+        })
+      : chartSelection;
+
+    if (needsCustom) {
+      setChartSelection(nextSelection);
+    }
+
     setTakeoffTables((prev) => {
-      const current = prev[takeoffType] || prev.pipe;
+      const displayed = takeoffTable;
       const nextTables = {
         ...prev,
         [takeoffType]: {
-          ...current,
-          [size]: { ...current[size], [fitting]: num },
+          ...displayed,
+          [size]: { ...displayed[size], [fitting]: num },
         },
       };
-      persistTakeoffTables(nextTables);
+      persistTakeoffTables(nextTables, nextSelection);
       return nextTables;
     });
   }
@@ -752,6 +806,34 @@ export default function Home() {
     applyTypeReset(nextType);
   }
 
+  function handleChartSelectionChange(trade, patch) {
+    const next = normalizeChartSelection(
+      {
+        ...chartSelection,
+        [trade]: { ...chartSelection[trade], ...patch },
+      },
+      { conduitType }
+    );
+    if (trade === "electrical") {
+      setConduitType(conduitLabelFromMaterial(next.electrical.materialSystem));
+    }
+    const explicitCustomChart = patch.chartId === CHART_IDS.companyCustom;
+    const switchingToCustom =
+      explicitCustomChart &&
+      ((trade === "electrical" &&
+        chartSelection.electrical?.chartId !== CHART_IDS.companyCustom) ||
+        (trade === "plumbing" &&
+          chartSelection.plumbing?.chartId !== CHART_IDS.companyCustom));
+    setChartSelection(next);
+    if (switchingToCustom && trade === takeoffType) {
+      const copied = { ...takeoffTables, [trade]: takeoffTable };
+      setTakeoffTables(copied);
+      persistTakeoffTables(copied, next);
+    } else {
+      persistTakeoffTables(takeoffTables, next);
+    }
+  }
+
   function handleToggleCategory(categoryId) {
     setCategories((prev) => ({
       ...prev,
@@ -761,9 +843,15 @@ export default function Home() {
 
   async function handleSaveDefaultType() {
     writeDefaultTakeoffType(takeoffType);
-    writeLocalTakeoffBundle(takeoffTables, takeoffType);
+    writeLocalTakeoffBundle(takeoffTables, takeoffType, chartSelection);
     if (cloudEnabled && features.companyStandards && authUser?.id) {
-      await saveCloudTakeoffStandards(authUser.id, takeoffTables, cloudTakeoffRowId, takeoffType);
+      await saveCloudTakeoffStandards(
+        authUser.id,
+        takeoffTables,
+        cloudTakeoffRowId,
+        takeoffType,
+        chartSelection
+      );
     }
     setDefaultTypeNote(`Default saved: ${preset.displayName} (this device${cloudEnabled ? " + account standards" : ""})`);
   }
@@ -1083,7 +1171,14 @@ export default function Home() {
               takeoffType={takeoffType}
               preset={preset}
               categories={categories}
+              chartSelection={chartSelection}
+              chartStatus={
+                takeoffType === "electrical" || takeoffType === "plumbing" || takeoffType === "hvac"
+                  ? chartResolved.status
+                  : null
+              }
               onTypeChange={handleTakeoffTypeChange}
+              onChartSelectionChange={handleChartSelectionChange}
               onToggleCategory={handleToggleCategory}
               onSaveDefault={handleSaveDefaultType}
               defaultSaved={defaultTypeNote}
@@ -1108,6 +1203,34 @@ export default function Home() {
                         "Unverified default — confirm against your manufacturer/company chart."}
                     </p>
                   ) : null}
+                  {takeoffType === "electrical" &&
+                  chartSelection.electrical?.chartId !== CHART_IDS.companyCustom ? (
+                    <button
+                      type="button"
+                      className={styles.secondaryActionBtn}
+                      onClick={() =>
+                        handleChartSelectionChange("electrical", {
+                          chartId: CHART_IDS.companyCustom,
+                        })
+                      }
+                    >
+                      Use Company Custom Chart
+                    </button>
+                  ) : null}
+                  {takeoffType === "plumbing" &&
+                  chartSelection.plumbing?.chartId !== CHART_IDS.companyCustom ? (
+                    <button
+                      type="button"
+                      className={styles.secondaryActionBtn}
+                      onClick={() =>
+                        handleChartSelectionChange("plumbing", {
+                          chartId: CHART_IDS.companyCustom,
+                        })
+                      }
+                    >
+                      Use Company Custom Chart
+                    </button>
+                  ) : null}
                   <div className={styles.takeoffTableWrap}>
                     <table className={styles.takeoffTable}>
                       <thead>
@@ -1124,20 +1247,27 @@ export default function Home() {
                         {preset.sizes.map((size) => (
                           <tr key={size}>
                             <th scope="row">{size}</th>
-                            {fittingTypes.map((fitting) => (
-                              <td key={fitting}>
-                                <input
-                                  type="number"
-                                  min="0"
-                                  step="0.01"
-                                  aria-label={`${size} ${fitting} takeoff inches`}
-                                  value={takeoffTable[size]?.[fitting] ?? 0}
-                                  onChange={(event) =>
-                                    updateTakeoffCell(size, fitting, event.target.value)
-                                  }
-                                />
-                              </td>
-                            ))}
+                            {fittingTypes.map((fitting) => {
+                              const meta = chartResolved.cellMeta?.[size]?.[fitting];
+                              const locked = meta?.editable === false;
+                              return (
+                                <td key={fitting}>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="0.01"
+                                    readOnly={locked}
+                                    className={locked ? styles.takeoffCellVerified : undefined}
+                                    title={meta?.notes || undefined}
+                                    aria-label={`${size} ${fitting} takeoff inches`}
+                                    value={takeoffTable[size]?.[fitting] ?? 0}
+                                    onChange={(event) =>
+                                      updateTakeoffCell(size, fitting, event.target.value)
+                                    }
+                                  />
+                                </td>
+                              );
+                            })}
                           </tr>
                         ))}
                       </tbody>
@@ -1191,18 +1321,6 @@ export default function Home() {
                   ))}
                 </select>
               </label>
-              {takeoffType === "electrical" ? (
-                <label className={styles.inlineLabel}>
-                  Conduit Type
-                  <select value={conduitType} onChange={(event) => setConduitType(event.target.value)}>
-                    {CONDUIT_TYPES.map((type) => (
-                      <option key={type} value={type}>
-                        {type}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              ) : null}
               {takeoffType === "hvac" ? (
                 <div className={styles.runFields}>
                   <label>

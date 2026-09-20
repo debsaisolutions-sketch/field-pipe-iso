@@ -85,37 +85,22 @@ function buildHvacTakeoffTable() {
   return out;
 }
 
+function emptyTable(sizes, fittingDefs) {
+  const out = {};
+  for (const size of sizes) {
+    out[size] = Object.fromEntries(fittingDefs.map((f) => [f.id, 0]));
+  }
+  return out;
+}
+
 function buildElectricalTakeoffTable() {
-  // Starter estimates only — not NEC bend-radius or fill calculations.
-  const bySize = {
-    '1/2"': { "90 bend": 4, "45 bend": 2, offset: 6, coupling: 0, connector: 0, "junction box": 0, "pull box": 0, LB: 3 },
-    '3/4"': { "90 bend": 5, "45 bend": 2.5, offset: 8, coupling: 0, connector: 0, "junction box": 0, "pull box": 0, LB: 3.5 },
-    '1"': { "90 bend": 6, "45 bend": 3, offset: 10, coupling: 0, connector: 0, "junction box": 0, "pull box": 0, LB: 4 },
-    '1-1/4"': { "90 bend": 8, "45 bend": 4, offset: 12, coupling: 0, connector: 0, "junction box": 0, "pull box": 0, LB: 5 },
-    '1-1/2"': { "90 bend": 10, "45 bend": 5, offset: 14, coupling: 0, connector: 0, "junction box": 0, "pull box": 0, LB: 6 },
-    '2"': { "90 bend": 12, "45 bend": 6, offset: 16, coupling: 0, connector: 0, "junction box": 0, "pull box": 0, LB: 7 },
-    '3"': { "90 bend": 18, "45 bend": 9, offset: 24, coupling: 0, connector: 0, "junction box": 0, "pull box": 0, LB: 10 },
-    '4"': { "90 bend": 24, "45 bend": 12, offset: 32, coupling: 0, connector: 0, "junction box": 0, "pull box": 0, LB: 12 },
-  };
-  return bySize;
+  // Storage default is empty. Live Klein 90° take-up is applied by resolveTakeoffChart.
+  return emptyTable(ELECTRICAL_SIZES, ELECTRICAL_FITTINGS);
 }
 
 function buildPlumbingTakeoffTable() {
-  const out = {};
-  for (const size of PIPE_SIZES) {
-    const p = DEFAULT_TAKEOFF_TABLE[size];
-    out[size] = {
-      "90 elbow": p["90 elbow"],
-      "45 elbow": p["45 elbow"],
-      tee: p.tee,
-      wye: p.tee,
-      coupling: p.coupling,
-      valve: p.valve,
-      cleanout: p.coupling,
-      trap: p["90 elbow"],
-    };
-  }
-  return out;
+  // Do not copy Pipe/Welding. Charlotte letters are not mapped until drawings are unambiguous.
+  return emptyTable(PIPE_SIZES, PLUMBING_FITTINGS);
 }
 
 export const HVAC_TAKEOFF_TABLE = buildHvacTakeoffTable();
@@ -246,7 +231,7 @@ export const TAKEOFF_PRESETS = {
     extraRunFields: ["duct"],
     headerTagline: "Simplified duct-run takeoff for lengths, fittings, and a field sketch.",
     chartNote:
-      "HVAC takeoff values are editable starter estimates for centerline length, not sheet-metal fabrication developments. Advanced fitting allowances are a future enhancement.",
+      "These HVAC multipliers are UNVERIFIED generated placeholders — not SMACNA and not a manufacturer chart. Do not treat them as verified. SMACNA/manufacturer selection is prepared but not loaded.",
     terminology: {
       sizeLabel: "Duct Size",
       runsTitle: "Duct Runs",
@@ -276,7 +261,7 @@ export const TAKEOFF_PRESETS = {
       printFooter:
         "PipeSketch Pro · HVAC quantities are simplified field estimates. Verify fabrication standards before ordering.",
       takeoffChartHelp:
-        "Starter centerline estimates only. Actual fitting takeoff varies by throat radius, joint type, and shop practice. Adjust the chart for your job.",
+        "Unverified generated values only. Not SMACNA. Not a manufacturer fitting table. Enter company values or wait for a loaded chart.",
     },
   },
   electrical: {
@@ -294,9 +279,14 @@ export const TAKEOFF_PRESETS = {
     fittingIds: ELECTRICAL_FITTINGS.map((f) => f.id),
     takeoffTable: ELECTRICAL_TAKEOFF_TABLE,
     verification: verificationMeta({
-      sourceType: "unverified",
-      usesUnverifiedNumericDefaults: true,
-      unverifiedLabel: UNVERIFIED_DEFAULT_LABEL,
+      sourceType: "verified_chart",
+      sourceName: "Klein Tools — Conduit Bending Basics (90° stub-up take-up for listed EMT/Rigid sizes only)",
+      sourceUrl:
+        "https://data.kleintools.com/sites/all/product_assets/documents/instructions/klein/ConduitBenderGuide.pdf",
+      manufacturer: "Klein Tools",
+      chartVersion: "Conduit Bender Guide",
+      verifiedAt: "2026-09-19",
+      usesUnverifiedNumericDefaults: false,
     }),
     ninetyFittingId: "90 bend",
     conduitTypes: CONDUIT_TYPES,
@@ -315,7 +305,7 @@ export const TAKEOFF_PRESETS = {
     extraRunFields: ["electrical"],
     headerTagline: "Conduit-run takeoff for lengths, fittings, boxes, and conductor footage.",
     chartNote:
-      "Bend takeoffs are editable starter estimates. Conduit-fill and conductor sizing are not calculated.",
+      "Klein 90° stub-up take-up is applied only for sizes listed in Klein’s Conduit Bender Guide. 45°, offset, LB, boxes, PVC, and unlisted sizes are not filled from that guide.",
     terminology: {
       sizeLabel: "Conduit Size",
       runsTitle: "Conduit Runs",
@@ -346,7 +336,7 @@ export const TAKEOFF_PRESETS = {
       printFooter:
         "PipeSketch Pro · Electrical quantities are field estimates only. This is not an NEC fill or wire-sizing calculation.",
       takeoffChartHelp:
-        "Starter estimates only. Real bend gain/take-up varies by conduit type and bender. Adjust values for your crew standard.",
+        "Select EMT or Rigid plus Klein Hand Bender for published 90° take-up. Other cells stay company-custom. This is not an NEC fill calculation.",
     },
   },
   plumbing: {
@@ -365,8 +355,15 @@ export const TAKEOFF_PRESETS = {
     takeoffTable: PLUMBING_TAKEOFF_TABLE,
     verification: verificationMeta({
       sourceType: "unverified",
-      usesUnverifiedNumericDefaults: true,
-      unverifiedLabel: UNVERIFIED_DEFAULT_LABEL,
+      sourceName: "Charlotte Pipe DC-DWV catalog inspected; letter dimensions not mapped to cut length",
+      sourceUrl:
+        "https://www.charlottepipe.com/Documents/DimensionalCatalogs/Plastic_Pipe_Fittings_DC-DWV%28609%29.pdf",
+      manufacturer: "Charlotte Pipe",
+      chartVersion: "DC-DWV updated April 7, 2026",
+      verifiedAt: "2026-09-19",
+      usesUnverifiedNumericDefaults: false,
+      unverifiedLabel:
+        "Chart not verified for this material/manufacturer — enter company value.",
     }),
     ninetyFittingId: "90 elbow",
     categories: [
@@ -376,7 +373,8 @@ export const TAKEOFF_PRESETS = {
     defaultCategories: { water: true, dwv: true },
     extraRunFields: ["plumbing"],
     headerTagline: "Plumbing run takeoff for pipe, fittings, and a field sketch.",
-    chartNote: "Not a code-compliance calculator. Quantities are run length plus fittings.",
+    chartNote:
+      "Plumbing no longer uses the Pipe/Welding table. Charlotte DWV catalog letters are on file but are not mapped into cut length until fitting drawings make that mapping unambiguous.",
     terminology: {
       sizeLabel: "Pipe Size",
       runsTitle: "Plumbing Runs",
@@ -406,7 +404,7 @@ export const TAKEOFF_PRESETS = {
       printFooter:
         "PipeSketch Pro · Plumbing quantities are field estimates, not a code-compliance calculation.",
       takeoffChartHelp:
-        "Starter estimates only. Fitting takeoff varies by joint type and manufacturer. Verify before cutting.",
+        "Chart not verified for this material/manufacturer — enter company value. Welding takeoffs are not used.",
     },
   },
   framing: {
@@ -426,8 +424,6 @@ export const TAKEOFF_PRESETS = {
     verification: verificationMeta({
       sourceType: "company_custom",
       sourceName: "Editable field assumptions plus deterministic count formulas.",
-      hiddenAssumptionNote:
-        "Sheathing opening heights (7 ft door / 4 ft window) are built-in and unverified — not shown as editable fields.",
     }),
     categories: [],
     defaultCategories: {},

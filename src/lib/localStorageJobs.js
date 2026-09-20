@@ -23,12 +23,12 @@ export function readLocalTakeoffBundle() {
   return unwrapStandardsBlob(parsed);
 }
 
-export function writeLocalTakeoffBundle(tables, defaultTakeoffType) {
+export function writeLocalTakeoffBundle(tables, defaultTakeoffType, chartSelection) {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(
       TAKEOFF_SETTINGS_STORAGE_KEY,
-      JSON.stringify(wrapStandardsBlob(tables, defaultTakeoffType))
+      JSON.stringify(wrapStandardsBlob(tables, defaultTakeoffType, chartSelection))
     );
   } catch {
     // quota / private mode

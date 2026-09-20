@@ -3,7 +3,6 @@ import { toInches } from "./geometry";
 import { DEFAULT_TAKEOFF_TABLE } from "./takeoff";
 import {
   ELECTRICAL_SIZES,
-  ELECTRICAL_TAKEOFF_TABLE,
   HVAC_SIZES,
   HVAC_TAKEOFF_TABLE,
   PLUMBING_TAKEOFF_TABLE,
@@ -382,27 +381,49 @@ export function buildVerificationInventory() {
     })
   );
 
+  const kleinEmt90 = {
+    '1/2"': 5,
+    '3/4"': 6,
+    '1"': 8,
+    '1-1/4"': 11,
+  };
+  const kleinRigid90 = {
+    '1/2"': 6,
+    '3/4"': 8,
+    '1"': 11,
+  };
+  const kleinSource =
+    "Klein Tools Conduit Bender Guide / Conduit Bending Basics — 90° Stub-Up Bender Take-Up Table";
+  const kleinUrl =
+    "https://data.kleintools.com/sites/all/product_assets/documents/instructions/klein/ConduitBenderGuide.pdf";
+
   const electricalDeductItems = ["90 bend", "45 bend", "offset", "LB"];
   const electricalZeroItems = ["coupling", "connector", "junction box", "pull box"];
 
   for (const size of ELECTRICAL_SIZES) {
-    const table = ELECTRICAL_TAKEOFF_TABLE[size];
     for (const item of electricalDeductItems) {
+      const kleinValue = item === "90 bend" ? kleinEmt90[size] : null;
       rows.push(
         row({
           trade: "Electrical",
           category: "Bend / take-up",
-          system: "All conduit types share one table (EMT/PVC/RMC/IMC/FMC not distinguished)",
+          system: "EMT · Klein Hand Bender",
           size,
           item,
-          currentValue: table[item],
+          currentValue: kleinValue ?? 0,
           unit: "in",
-          formula: "lookup",
-          location: "src/lib/takeoffPresets.js buildElectricalTakeoffTable",
-          source: "none found — comment says starter estimates, not NEC",
-          status: VERIFICATION_STATUS.UNVERIFIED,
-          editable: true,
-          notes: "Depends on bender brand, shoe, and conduit type. Table does not select a manufacturer.",
+          formula: kleinValue != null ? "Klein 90° stub-up take-up (amount to subtract from stub height)" : "not loaded",
+          location:
+            kleinValue != null
+              ? "src/lib/charts/electricalKlein.js KLEIN_EMT_90_TAKEUP"
+              : "src/lib/charts/resolveTakeoffChart.js resolveElectricalChart",
+          source: kleinValue != null ? kleinSource : "Klein guide has no per-size cut-length deduction for this cell",
+          status: kleinValue != null ? VERIFICATION_STATUS.VERIFIED : VERIFICATION_STATUS.UNVERIFIED,
+          editable: kleinValue == null,
+          notes:
+            kleinValue != null
+              ? "Manufacturer-specific Klein hand-bender value. Not universal. PVC does not inherit this cell."
+              : "Left blank. Klein offset/45/LB tables are marking formulas, not a single takeoff deduction. Unlisted 90° sizes stay unverified.",
         })
       );
     }
@@ -427,6 +448,27 @@ export function buildVerificationInventory() {
     }
   }
 
+  for (const [size, value] of Object.entries(kleinRigid90)) {
+    rows.push(
+      row({
+        trade: "Electrical",
+        category: "Bend / take-up",
+        system: "Rigid · Klein Hand Bender",
+        size,
+        item: "90 bend",
+        currentValue: value,
+        unit: "in",
+        formula: "Klein 90° stub-up take-up (published beside the paired EMT size)",
+        location: "src/lib/charts/electricalKlein.js KLEIN_RIGID_90_TAKEUP",
+        source: kleinSource,
+        status: VERIFICATION_STATUS.VERIFIED,
+        editable: false,
+        notes:
+          "Klein lists Rigid, not IMC. IMC shares the Rigid/IMC selector and must be confirmed on the bender. 1-1/4\" Rigid is not in this Klein table.",
+      })
+    );
+  }
+
   rows.push(
     row({
       trade: "Electrical",
@@ -443,46 +485,48 @@ export function buildVerificationInventory() {
     row({
       trade: "Electrical",
       category: "Default input",
-      item: "Default conduit type",
-      currentValue: "EMT",
+      item: "Default conduit type / chart",
+      currentValue: "EMT / Klein Hand Bender",
       unit: "—",
-      formula: "constant",
-      location: "src/lib/takeoffSwitch.js / page.js",
-      source: "app default",
+      formula: "selector",
+      location: "src/lib/charts/chartTypes.js DEFAULT_CHART_SELECTION",
+      source: "app default plus Klein chart when selected",
       status: VERIFICATION_STATUS.COMPANY,
       editable: true,
-      notes: "Type is a label only; takeoff table does not change with EMT vs PVC vs rigid.",
+      notes: "Conduit type now selects a chart. PVC cannot use the Klein EMT table.",
     })
   );
 
-  const plumbingMap = {
-    "90 elbow": "copied from pipe 90 elbow",
-    "45 elbow": "copied from pipe 45 elbow",
-    tee: "copied from pipe tee",
-    wye: "copied from pipe tee",
-    coupling: "copied from pipe coupling",
-    valve: "copied from pipe valve",
-    cleanout: "copied from pipe coupling",
-    trap: "copied from pipe 90 elbow",
-  };
+  const plumbingItems = [
+    "90 elbow",
+    "45 elbow",
+    "tee",
+    "wye",
+    "coupling",
+    "valve",
+    "cleanout",
+    "trap",
+  ];
 
   for (const size of PIPE_SIZES) {
-    for (const [item, copied] of Object.entries(plumbingMap)) {
+    for (const item of plumbingItems) {
       rows.push(
         row({
           trade: "Plumbing",
           category: "Fitting takeoff",
-          system: "Universal (no PVC/copper/PEX/CI/CPVC)",
+          system: "PVC DWV / ABS DWV · Charlotte Pipe (unmapped)",
           size,
           item,
           currentValue: PLUMBING_TAKEOFF_TABLE[size][item],
           unit: "in",
-          formula: copied,
-          location: "src/lib/takeoffPresets.js buildPlumbingTakeoffTable",
-          source: "Pipe/Welding table reused — not a plumbing manufacturer socket chart",
+          formula: "empty until company value or mapped catalog dimension",
+          location: "src/lib/charts/plumbingCharlotte.js / resolvePlumbingChart",
+          source:
+            "Charlotte Pipe DC-DWV catalog inspected; letter dimensions not mapped to cut length",
           status: VERIFICATION_STATUS.UNVERIFIED,
           editable: true,
-          notes: "Welding centerline takeoffs are not PVC insertion depth, copper C-to-E, or PEX fittings.",
+          notes:
+            "Does not inherit Pipe/Welding. Catalog A/B/C letters are not used as takeoff because drawings/legends were not unambiguous. Copper/CPVC/PEX/CI are not loaded.",
         })
       );
     }
@@ -588,28 +632,29 @@ export function buildVerificationInventory() {
     }),
     row({
       trade: "Framing",
-      category: "Hidden assumption",
+      category: "Job assumption",
       item: "Door opening height used in sheathing",
       currentValue: 7,
       unit: "ft",
-      formula: "min(wallHeight, 7)",
-      location: "src/lib/tradeCalcs.js calculateFraming openingArea",
-      source: "none — not exposed in the form",
-      status: VERIFICATION_STATUS.UNVERIFIED,
-      editable: false,
-      notes: "Highest-risk framing item: affects sheathing only, not stud count. Not user-editable.",
+      formula: "min(wallHeight, doorOpeningHeight)",
+      location: "src/lib/tradeCalcs.js createDefaultTradeInputs / calculateFraming; TradeInputsPanel.js",
+      source: "editable job assumption — not a universal door height",
+      status: VERIFICATION_STATUS.COMPANY,
+      editable: true,
+      notes: "Starting default 7 ft for backward compatibility. Saved with the job. Labeled: Job assumption — edit to match plans.",
     }),
     row({
       trade: "Framing",
-      category: "Hidden assumption",
+      category: "Job assumption",
       item: "Window opening height used in sheathing",
       currentValue: 4,
       unit: "ft",
-      formula: "windowWidth × 4",
-      location: "src/lib/tradeCalcs.js calculateFraming openingArea",
-      source: "none — not exposed in the form",
-      status: VERIFICATION_STATUS.UNVERIFIED,
-      editable: false,
+      formula: "windowWidth × windowOpeningHeight",
+      location: "src/lib/tradeCalcs.js createDefaultTradeInputs / calculateFraming; TradeInputsPanel.js",
+      source: "editable job assumption — not a universal window height",
+      status: VERIFICATION_STATUS.COMPANY,
+      editable: true,
+      notes: "Starting default 4 ft for backward compatibility. Saved with the job. Labeled: Job assumption — edit to match plans.",
     }),
     row({
       trade: "Framing",
@@ -883,6 +928,116 @@ export function buildVerificationInventory() {
 
   return rows;
 }
+
+/** UNVERIFIED → VERIFIED (or COMPANY) conversions in this chart-backed increment. */
+export const CHART_VALUE_CONVERSIONS = [
+  {
+    previousStatus: VERIFICATION_STATUS.UNVERIFIED,
+    newStatus: VERIFICATION_STATUS.VERIFIED,
+    manufacturer: "Klein Tools",
+    chart: "Klein Hand Bender — 90° Stub-Up Take-Up Table",
+    sourceUrl:
+      "https://data.kleintools.com/sites/all/product_assets/documents/instructions/klein/ConduitBenderGuide.pdf",
+    sizeItem: '1/2" EMT 90 bend',
+    value: '5"',
+    location: "src/lib/charts/electricalKlein.js KLEIN_EMT_90_TAKEUP",
+    dateVerified: "2026-09-19",
+  },
+  {
+    previousStatus: VERIFICATION_STATUS.UNVERIFIED,
+    newStatus: VERIFICATION_STATUS.VERIFIED,
+    manufacturer: "Klein Tools",
+    chart: "Klein Hand Bender — 90° Stub-Up Take-Up Table",
+    sourceUrl:
+      "https://data.kleintools.com/sites/all/product_assets/documents/instructions/klein/ConduitBenderGuide.pdf",
+    sizeItem: '3/4" EMT 90 bend',
+    value: '6"',
+    location: "src/lib/charts/electricalKlein.js KLEIN_EMT_90_TAKEUP",
+    dateVerified: "2026-09-19",
+  },
+  {
+    previousStatus: VERIFICATION_STATUS.UNVERIFIED,
+    newStatus: VERIFICATION_STATUS.VERIFIED,
+    manufacturer: "Klein Tools",
+    chart: "Klein Hand Bender — 90° Stub-Up Take-Up Table",
+    sourceUrl:
+      "https://data.kleintools.com/sites/all/product_assets/documents/instructions/klein/ConduitBenderGuide.pdf",
+    sizeItem: '1" EMT 90 bend',
+    value: '8"',
+    location: "src/lib/charts/electricalKlein.js KLEIN_EMT_90_TAKEUP",
+    dateVerified: "2026-09-19",
+  },
+  {
+    previousStatus: VERIFICATION_STATUS.UNVERIFIED,
+    newStatus: VERIFICATION_STATUS.VERIFIED,
+    manufacturer: "Klein Tools",
+    chart: "Klein Hand Bender — 90° Stub-Up Take-Up Table",
+    sourceUrl:
+      "https://data.kleintools.com/sites/all/product_assets/documents/instructions/klein/ConduitBenderGuide.pdf",
+    sizeItem: '1-1/4" EMT 90 bend',
+    value: '11"',
+    location: "src/lib/charts/electricalKlein.js KLEIN_EMT_90_TAKEUP",
+    dateVerified: "2026-09-19",
+  },
+  {
+    previousStatus: VERIFICATION_STATUS.UNVERIFIED,
+    newStatus: VERIFICATION_STATUS.VERIFIED,
+    manufacturer: "Klein Tools",
+    chart: "Klein Hand Bender — 90° Stub-Up Take-Up Table",
+    sourceUrl:
+      "https://data.kleintools.com/sites/all/product_assets/documents/instructions/klein/ConduitBenderGuide.pdf",
+    sizeItem: '1/2" Rigid 90 bend',
+    value: '6"',
+    location: "src/lib/charts/electricalKlein.js KLEIN_RIGID_90_TAKEUP",
+    dateVerified: "2026-09-19",
+  },
+  {
+    previousStatus: VERIFICATION_STATUS.UNVERIFIED,
+    newStatus: VERIFICATION_STATUS.VERIFIED,
+    manufacturer: "Klein Tools",
+    chart: "Klein Hand Bender — 90° Stub-Up Take-Up Table",
+    sourceUrl:
+      "https://data.kleintools.com/sites/all/product_assets/documents/instructions/klein/ConduitBenderGuide.pdf",
+    sizeItem: '3/4" Rigid 90 bend',
+    value: '8"',
+    location: "src/lib/charts/electricalKlein.js KLEIN_RIGID_90_TAKEUP",
+    dateVerified: "2026-09-19",
+  },
+  {
+    previousStatus: VERIFICATION_STATUS.UNVERIFIED,
+    newStatus: VERIFICATION_STATUS.VERIFIED,
+    manufacturer: "Klein Tools",
+    chart: "Klein Hand Bender — 90° Stub-Up Take-Up Table",
+    sourceUrl:
+      "https://data.kleintools.com/sites/all/product_assets/documents/instructions/klein/ConduitBenderGuide.pdf",
+    sizeItem: '1" Rigid 90 bend',
+    value: '11"',
+    location: "src/lib/charts/electricalKlein.js KLEIN_RIGID_90_TAKEUP",
+    dateVerified: "2026-09-19",
+  },
+  {
+    previousStatus: VERIFICATION_STATUS.UNVERIFIED,
+    newStatus: VERIFICATION_STATUS.COMPANY,
+    manufacturer: "—",
+    chart: "Job assumption (not a manufacturer chart)",
+    sourceUrl: "",
+    sizeItem: "Framing door opening height (sheathing)",
+    value: "7 ft starting default, now editable",
+    location: "src/lib/tradeCalcs.js doorOpeningHeight; TradeInputsPanel.js",
+    dateVerified: "2026-09-19",
+  },
+  {
+    previousStatus: VERIFICATION_STATUS.UNVERIFIED,
+    newStatus: VERIFICATION_STATUS.COMPANY,
+    manufacturer: "—",
+    chart: "Job assumption (not a manufacturer chart)",
+    sourceUrl: "",
+    sizeItem: "Framing window opening height (sheathing)",
+    value: "4 ft starting default, now editable",
+    location: "src/lib/tradeCalcs.js windowOpeningHeight; TradeInputsPanel.js",
+    dateVerified: "2026-09-19",
+  },
+];
 
 export function summarizeVerification(rows = buildVerificationInventory()) {
   const counts = {

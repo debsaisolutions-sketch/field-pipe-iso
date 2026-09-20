@@ -23,7 +23,13 @@ export async function loadCloudTakeoffStandards(userId) {
   };
 }
 
-export async function saveCloudTakeoffStandards(userId, tablesOrPipe, existingId, defaultTakeoffType) {
+export async function saveCloudTakeoffStandards(
+  userId,
+  tablesOrPipe,
+  existingId,
+  defaultTakeoffType,
+  chartSelection
+) {
   const supabase = getSupabaseBrowserClient();
   if (!supabase || !userId) return { ok: false, error: "not_ready" };
 
@@ -31,7 +37,7 @@ export async function saveCloudTakeoffStandards(userId, tablesOrPipe, existingId
     tablesOrPipe && tablesOrPipe.pipe
       ? tablesOrPipe
       : { ...unwrapStandardsBlob(null).tables, pipe: tablesOrPipe };
-  const standards = wrapStandardsBlob(tables, defaultTakeoffType);
+  const standards = wrapStandardsBlob(tables, defaultTakeoffType, chartSelection);
   const payload = {
     user_id: userId,
     account_id: null,

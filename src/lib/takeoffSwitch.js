@@ -6,6 +6,7 @@ import {
 import { getPreset } from "./takeoffPresets";
 import { createDefaultTradeInputs } from "./tradeCalcs";
 import { normalizeTakeoffType } from "./takeoffTypes";
+import { emptyChartSelection } from "./charts/chartTypes";
 
 export function createDefaultSegmentForPreset(preset, id = 1, index = 0) {
   if (!preset || preset.id === "pipe") {
@@ -101,6 +102,7 @@ export function buildResetStateForType(type, job) {
     flipped: false,
     tradeInputs: createDefaultTradeInputs(),
     conduitType: "EMT",
+    chartSelection: emptyChartSelection(),
     job,
   };
 }

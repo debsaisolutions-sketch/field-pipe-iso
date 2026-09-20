@@ -7,14 +7,21 @@ import {
 } from "./takeoff";
 import {
   ELECTRICAL_SIZES,
-  ELECTRICAL_TAKEOFF_TABLE,
   HVAC_SIZES,
   HVAC_TAKEOFF_TABLE,
-  PLUMBING_TAKEOFF_TABLE,
   TAKEOFF_PRESETS,
 } from "./takeoffPresets";
 import { FITTING_TYPES, PIPE_SIZES } from "./constants";
 import { normalizeTakeoffType } from "./takeoffTypes";
+import {
+  emptyElectricalTable,
+  emptyPlumbingTable,
+  inferChartSelectionFromStoredTables,
+  isLegacyElectricalTable,
+  isLegacyPlumbingWeldingTable,
+  normalizeChartSelection,
+} from "./charts/resolveTakeoffChart";
+import { emptyChartSelection } from "./charts/chartTypes";
 
 function plumbingFittingIds() {
   return TAKEOFF_PRESETS.plumbing.fittingIds;
@@ -32,12 +39,12 @@ export function createDefaultTakeoffTables() {
   return {
     pipe: cloneTakeoffTable(PIPE_SIZES, FITTING_TYPES, DEFAULT_TAKEOFF_TABLE),
     hvac: cloneTakeoffTable(HVAC_SIZES, hvacFittingIds(), HVAC_TAKEOFF_TABLE),
-    electrical: cloneTakeoffTable(ELECTRICAL_SIZES, electricalFittingIds(), ELECTRICAL_TAKEOFF_TABLE),
-    plumbing: cloneTakeoffTable(PIPE_SIZES, plumbingFittingIds(), PLUMBING_TAKEOFF_TABLE),
+    electrical: emptyElectricalTable(),
+    plumbing: emptyPlumbingTable(),
   };
 }
 
-export function wrapStandardsBlob(tables, defaultTakeoffType) {
+export function wrapStandardsBlob(tables, defaultTakeoffType, chartSelection) {
   const bundle = tables || createDefaultTakeoffTables();
   const pipe = bundle.pipe || createDefaultTakeoffTables().pipe;
   const payload = { ...pipe, _tradeTables: {} };
@@ -47,6 +54,9 @@ export function wrapStandardsBlob(tables, defaultTakeoffType) {
   if (defaultTakeoffType) {
     payload._defaultTakeoffType = normalizeTakeoffType(defaultTakeoffType);
   }
+  if (chartSelection) {
+    payload._chartSelection = normalizeChartSelection(chartSelection);
+  }
   return payload;
 }
 
@@ -54,6 +64,24 @@ export function unwrapStandardsBlob(raw) {
   const defaults = createDefaultTakeoffTables();
   const pipe = normalizeStoredTakeoffTable(raw);
   const nested = raw && typeof raw === "object" ? raw._tradeTables : null;
+  let electrical = normalizeTakeoffTable(
+    nested?.electrical,
+    ELECTRICAL_SIZES,
+    electricalFittingIds(),
+    emptyElectricalTable()
+  );
+  let plumbing = normalizeTakeoffTable(
+    nested?.plumbing,
+    PIPE_SIZES,
+    plumbingFittingIds(),
+    emptyPlumbingTable()
+  );
+  if (isLegacyElectricalTable(electrical)) electrical = emptyElectricalTable();
+  if (isLegacyPlumbingWeldingTable(plumbing)) plumbing = emptyPlumbingTable();
+  const storedSelection =
+    raw && raw._chartSelection
+      ? normalizeChartSelection(raw._chartSelection)
+      : inferChartSelectionFromStoredTables({ electrical: nested?.electrical, plumbing: nested?.plumbing });
   return {
     tables: {
       pipe,
@@ -63,22 +91,13 @@ export function unwrapStandardsBlob(raw) {
         hvacFittingIds(),
         HVAC_TAKEOFF_TABLE
       ),
-      electrical: normalizeTakeoffTable(
-        nested?.electrical,
-        ELECTRICAL_SIZES,
-        electricalFittingIds(),
-        ELECTRICAL_TAKEOFF_TABLE
-      ),
-      plumbing: normalizeTakeoffTable(
-        nested?.plumbing,
-        PIPE_SIZES,
-        plumbingFittingIds(),
-        PLUMBING_TAKEOFF_TABLE
-      ),
+      electrical,
+      plumbing,
     },
     defaultTakeoffType: raw && raw._defaultTakeoffType
       ? normalizeTakeoffType(raw._defaultTakeoffType)
       : null,
+    chartSelection: storedSelection || emptyChartSelection(),
     defaults,
   };
 }

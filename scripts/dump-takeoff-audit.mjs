@@ -5,6 +5,7 @@ import {
   buildVerificationInventory,
   inventoryToMarkdownTable,
   summarizeVerification,
+  CHART_VALUE_CONVERSIONS,
 } from "../src/lib/takeoffVerification.js";
 
 export function writeTakeoffAuditMarkdown(cwd = process.cwd()) {
@@ -26,7 +27,7 @@ export function writeTakeoffAuditMarkdown(cwd = process.cwd()) {
 **Scope:** Every numeric default, lookup cell, conversion, waste factor, and formula currently used by the multi-trade presets.
 **Rule:** Values are not promoted to VERIFIED unless a source is in this repo or the existing Pipe/Welding 90°/45° Blue Book formulas.
 
-This file is the human-readable audit. The machine inventory that generated the matrix lives in \`src/lib/takeoffVerification.js\` (\`buildVerificationInventory()\`). Metadata fields on presets (\`sourceType\`, \`sourceName\`, \`sourceUrl\`, \`manufacturer\`, \`chartVersion\`, \`verifiedAt\`) are documentation only and **do not change calculations**.
+This file is the human-readable audit. The machine inventory that generated the matrix lives in \`src/lib/takeoffVerification.js\` (\`buildVerificationInventory()\`). Chart selection and per-cell metadata live on jobs/standards JSON (\`calculator_state.chart_selection\`, \`_chartSelection\`).
 
 ---
 
@@ -53,7 +54,8 @@ This file is the human-readable audit. The machine inventory that generated the 
 | Material list | \`src/lib/materialList.js\` |
 | Save/load / defaults | \`src/lib/jobSnapshot.js\`, \`src/lib/standardsBundle.js\`, \`src/lib/takeoffSwitch.js\`, \`src/lib/cloudTakeoff.js\`, \`src/lib/localStorageJobs.js\` |
 | PDF | \`src/components/PrintDocument.js\` |
-| UI defaults | \`src/app/page.js\`, \`src/components/TradeInputsPanel.js\` |
+| Charts | \`src/lib/charts/electricalKlein.js\`, \`src/lib/charts/plumbingCharlotte.js\`, \`src/lib/charts/resolveTakeoffChart.js\`, \`src/lib/charts/chartTypes.js\` |
+| UI defaults | \`src/app/page.js\`, \`src/components/TradeInputsPanel.js\`, \`src/components/TakeoffTypeBar.js\` |
 
 Skipped as not takeoff math: CSS layout numbers, button min-heights, entitlement flags, auth.
 
@@ -84,6 +86,23 @@ ${Object.entries(byTrade)
 
 ---
 
+## UNVERIFIED → VERIFIED / COMPANY conversions (2026-09-19 increment)
+
+Do not mark an entire trade verified because some cells converted.
+
+| Previous | New | Manufacturer | Chart | Source URL | Size / item | Value | Code location | Date |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+${CHART_VALUE_CONVERSIONS.map(
+  (c) =>
+    `| ${c.previousStatus} | ${c.newStatus} | ${c.manufacturer} | ${c.chart} | ${c.sourceUrl || "—"} | ${c.sizeItem} | ${c.value} | \`${c.location}\` | ${c.dateVerified} |`
+).join("\n")}
+
+Plumbing: **no cells converted to VERIFIED.** Charlotte DC-DWV was inspected; letter dimensions were not mapped into cut length.
+
+HVAC: **no cells converted.** Generated multipliers stay UNVERIFIED. SMACNA selector is present but disabled.
+
+---
+
 ## Findings by trade
 
 ### Pipe / Welding — preserve current table
@@ -95,29 +114,35 @@ ${Object.entries(byTrade)
 
 No Pipe/Welding production numbers were changed in this audit.
 
-### HVAC / Duct — UNVERIFIED chart
+### HVAC / Duct — UNVERIFIED chart (architecture only)
 
-Generated as \`primary dimension × {90:1, 45:0.5, transition:0.5, tee:0.75, boot:0.5, damper:0.25}\`, register = 0. **No SMACNA, throat-radius, or manufacturer chart in the repo.** Fitting cells are **UNVERIFIED**. Register 0 is a modeling choice (**COMPANY CUSTOM**). Insulation copies duct cut length (**PLACEHOLDER / ESTIMATE**). UI already called these starter estimates; the Takeoff Settings table now also shows: *Unverified default — confirm against your manufacturer/company chart.*
+Generated as \`primary dimension × {90:1, 45:0.5, transition:0.5, tee:0.75, boot:0.5, damper:0.25}\`, register = 0. **No SMACNA, throat-radius, or manufacturer chart is loaded.** Fitting cells remain **UNVERIFIED**. Selectors exist for Rectangular / Round / Flex and Company Custom; SMACNA is listed as disabled “not loaded.” Do not treat generated multipliers as verified.
 
-### Electrical — UNVERIFIED bend chart
+### Electrical — Klein 90° stub-up only
 
-Hard-coded take-up / offset / LB values look like a bender chart but:
+Production chart: **Klein Hand Bender** on EMT (and Rigid sizes Klein lists).
 
-- do not name a manufacturer (Greenlee, Klein, Ideal, Gardner Bender, …)
-- do not change when the user picks EMT / PVC / RMC / IMC / FMC
-- do not distinguish bender type or shoe
+Verified 90° take-up (amount to subtract from desired stub / free-end height):
 
-Those deducts are **UNVERIFIED**. Zeros for coupling / connector / boxes mean “no centerline deduction” (**COMPANY CUSTOM**). Conduit type is a **label only**. Same unverified-default label as HVAC.
+- 1/2" EMT → 5"
+- 3/4" EMT → 6" (same published cell as 1/2" Rigid)
+- 1" EMT → 8" (same published cell as 3/4" Rigid)
+- 1-1/4" EMT → 11" (same published cell as 1" Rigid)
 
-### Plumbing — UNVERIFIED reuse of welding takeoffs
+These are **Klein hand-bender values, not universal.** PVC does not inherit EMT. 1-1/4" Rigid, IMC-as-named, 45°, offset, shrink, LB, boxes, and unlisted sizes stay **UNVERIFIED** or company-custom. Klein offset multipliers were not converted into takeoff cells.
 
-Plumbing 90/45/tee/valve copy the **Pipe/Welding** table. Wye copies tee, cleanout copies coupling, trap copies 90. That is **not** PVC socket depth, copper C-to-E, PEX insert, or CI. **UNVERIFIED** for plumbing use even though the copied 90/45 numbers are verified as welding elbows. Same unverified-default label.
+IDEAL’s 3/4" EMT stub example (6" take-up) was used only as a cross-check. IDEAL is not a selectable chart.
 
-### Framing — math + editable assumptions + two hidden risks
+### Plumbing — Charlotte architecture, no mapped takeoff
+
+Plumbing **no longer copies Pipe/Welding**. Charlotte Pipe DC-DWV (updated April 7, 2026) is selectable for PVC DWV / ABS DWV. Catalog letter dimensions (A, B, C, …) were **not** mapped into cut length because fitting drawings/legends did not make center-to-end vs socket vs laying length unambiguous. Copper / CPVC / PEX / Cast Iron charts are not loaded. Empty cells stay **UNVERIFIED** until a company value or a drawing-backed mapping exists. UI: *Chart not verified for this material/manufacturer — enter company value.*
+
+### Framing — exposed job assumptions
 
 - Stud count \`floor(length_in / OC) + 1\`, waste, plate LF: **MATHEMATICALLY DERIVED**.
 - 16" OC, extras 2/4/4, plates 2/1, 10% waste, typical header widths: **COMPANY CUSTOM / USER EDITABLE**.
-- Hidden door height **7 ft** and window height **4 ft** used only for sheathing: **UNVERIFIED** and **not editable**. A quiet note was added next to the sheathing checkbox. 4×8 sheet area (32 sf) is math **given** that sheet size.
+- Door opening height (default 7 ft) and window opening height (default 4 ft) are **visible, editable job assumptions** used for sheathing. Not claimed as universal. Saved with the job. Labeled: *Job assumption — edit to match plans.*
+- 4×8 sheet area (32 sf) is math **given** that sheet size.
 
 ### Drywall — sheet math vs finishing guesses
 
@@ -143,11 +168,10 @@ Plumbing 90/45/tee/valve copy the **Pipe/Welding** table. Wye copies tee, cleano
 
 ## Highest-risk unverified values
 
-1. **Electrical 90/45/offset/LB table** — looks authoritative, is not manufacturer-tagged, ignores conduit type.
-2. **Plumbing fitting takeoffs** — welding numbers used as if they were plumbing insertion/C-to-E.
-3. **HVAC elbow/transition/tee/boot/damper multipliers** — generated, not SMACNA.
-4. **Framing hidden 7 ft door / 4 ft window** — affects sheathing only; users cannot see or edit them in the assumption fields.
-5. **Drywall tape 0.37** and **brick 6.75 /sf** — unlabeled-source estimates (tape is at least marked estimate in the UI).
+1. **Electrical 45° / offset / LB / unlisted 90° sizes / PVC** — Klein 90° take-up is loaded only for listed EMT/Rigid sizes. Other electrical cells remain unverified.
+2. **Plumbing fitting takeoffs** — Charlotte catalog inspected but not mapped; cells stay empty/unverified. Welding table is no longer used.
+3. **HVAC elbow/transition/tee/boot/damper multipliers** — generated, not SMACNA. Still unverified.
+4. **Drywall tape 0.37** and **brick 6.75 /sf** — unlabeled-source estimates (tape is at least marked estimate in the UI).
 
 ---
 
@@ -162,67 +186,40 @@ Plumbing 90/45/tee/valve copy the **Pipe/Welding** table. Wye copies tee, cleano
 
 ---
 
-## Data model — can we support manufacturer charts?
+## Data model — manufacturer charts (no SQL)
 
-**Yes, without a new database table.** Jobs already store JSON in \`calculator_state\` and \`psp_takeoff_standards\` JSONB. Charts can live on the preset (defaults) and optionally in the standards blob.
+Jobs store \`calculator_state.chart_selection\`. Company standards store \`_chartSelection\` on the existing JSON blob.
 
-Smallest non-breaking addition (already started on presets; not required in saved jobs yet):
+Active calculation identity:
 
-\`\`\`js
-verification: {
-  sourceType: "verified_chart" | "math" | "company_custom" | "estimate" | "unverified",
-  sourceName: "",
-  sourceUrl: "",
-  manufacturer: "",
-  chartVersion: "",
-  verifiedAt: null,
-}
+- takeoff_type
+- material_system
+- manufacturer
+- chart_name / chart_version / source
+- size
+- component
+- takeoff_value
+- verification_status
 
-// later, per cell or per table (standards JSON / calculator_state):
-chart_meta: {
-  takeoff_type: "electrical",
-  material_system: "EMT",
-  manufacturer: "Greenlee",
-  chart_name: "EMT 90° take-up",
-  chart_version: "2024",
-  source_url: "",
-  verified_at: "2026-09-19",
-  verification_status: "verified_chart"
-}
-\`\`\`
+Per verified cell metadata: \`sourceType\`, \`sourceName\`, \`sourceUrl\`, \`manufacturer\`, \`chartName\`, \`chartVersion\`, \`verifiedAt\`, \`materialSystem\`, \`applicableSizes\`, \`notes\`.
 
-**Do not add a SQL migration until we load a real chart.** Optional \`_chartMeta\` on the existing standards wrapper would persist user-selected charts the same way \`_tradeTables\` already stores HVAC/electrical/plumbing tables.
-
-Recommended next fields when charts are loaded: \`takeoff_type\`, \`material_system\`, \`manufacturer\`, \`chart_name\`, \`chart_version\`, \`source_url\`, \`verified_at\`, \`verification_status\`.
-
-Architecture gap today: Electrical conduit type and Plumbing water/DWV are labels/categories; they **do not select a table**. HVAC has no rectangular vs round manufacturer split. Framing/drywall/concrete have no chart objects at all (formulas + defaults).
+Plumbing never falls back to the welding table. Unsupported material/manufacturer combinations stay company-custom / unverified.
 
 ---
 
 ## Source research plan (do not scrape blogs)
 
-**Priority 1 — Electrical EMT (and then PVC / rigid) bend charts**
-Need take-up, gain, and shrink by size for 90° and 45°, plus offset multipliers, for:
-- Greenlee
-- Klein
-- Ideal
-- Gardner Bender
-Also need conduit-type distinction (EMT / IMC / Rigid / PVC) and bender/shoe notes. Stub-up is manufacturer + bender specific.
+**Priority 1 — Electrical (in progress)**
+Klein 90° stub-up take-up is loaded for listed sizes only. Still needed: 45°/offset/shrink/LB if a published rule maps cleanly to cut length; PVC; other manufacturers (Greenlee, IDEAL as its own chart, Gardner Bender).
 
 **Priority 2 — Plumbing fitting dimensions by system**
-Need center-to-end or socket/insertion depth by size for:
-- PVC DWV (Charlotte Pipe, Spears, NIBCO)
-- Copper pressure (wrought C-to-E)
-- CPVC
-- PEX (insert/crimp — often not a welding-style takeoff)
-- Cast iron (hub/no-hub)
-Wye, trap, and cleanout must come from those systems, not from welding tees/couplings/90s.
+Charlotte DC-DWV letters need drawing-backed mapping (center-to-end vs socket vs laying length) before any cell is filled. Then copper C-to-E, CPVC, PEX insert, CI hub/no-hub from primary catalogs. Spears remains a secondary index only.
 
 **Priority 3 — HVAC / duct**
-Need SMACNA fitting allowances and/or a named rectangular/round manufacturer table for elbows, transitions, tees, boots, dampers. Do not invent throat radii. Insulation should be wrap/board coverage rules, not “same as duct LF”.
+Need SMACNA fitting allowances and/or a named rectangular/round manufacturer table. Selectors are stubbed. Do not invent throat radii.
 
 **Priority 4 — Framing / drywall / masonry finishing**
-- Framing: keep formulas; expose door/window heights used in sheathing; cite IRC only as an *editable default*, never as a hidden universal.
+- Framing opening heights are now editable job assumptions.
 - Drywall: USG or similar tape/compound yield if we keep those estimates; otherwise keep them optional.
 - Masonry: BIA/NCMA face and mortar yield; actual vs nominal block size.
 
@@ -233,30 +230,27 @@ If Deb wants tee/reducer/flange/valve to be chart-backed, obtain the company Blu
 
 ## Tests added
 
-Deterministic math only (see \`src/lib/takeoffVerification.test.js\`):
+See \`src/lib/takeoffVerification.test.js\` and \`src/lib/charts/chartTakeoff.test.js\`:
 
-- ft / in / yd conversions
-- 10×10×4 in slab → cf and cy (with 5% waste applied as math, not as a “correct” waste rate)
-- framing stud counts on 16 ft @ 16" OC and 10 ft @ 16" OC
-- drywall sheet counts with and without a 3×7 opening
-- tape quantity from an explicit factor (does not bless 0.37)
-- CMU count from face-area math
-- Pipe 90/45 vs documented Blue Book formulas
-- 2" 90 still deducts 3" from 120"
-- save/load of framing type + inputs
-- preset isolation (HVAC table does not overwrite pipe 2" 90 = 3)
-- inventory still marks electrical 1" 90 as UNVERIFIED
-
-No test asserts that an HVAC/electrical/plumbing hard-coded takeoff is a correct published value.
+- Klein 1/2", 3/4", 1", 1-1/4" EMT 90 take-up
+- Company custom override
+- Unsupported combinations do not receive a verified value
+- PVC does not inherit EMT
+- Plumbing does not fall back to welding
+- Charlotte values are not auto-mapped into takeoff
+- Manufacturer selection persists in save/load
+- Framing door/window heights change sheathing and persist
+- Pipe/Welding math unchanged; old jobs load; trade switch does not leak charts
 
 ---
 
 ## UI safety labels
 
-- HVAC, Electrical, and Plumbing Takeoff Settings tables: *Unverified default — confirm against your manufacturer/company chart.*
-- Framing sheathing checkbox: note that 7 ft / 4 ft opening heights are built-in and unverified.
-- Mathematically derived trades (pure volume/sheet math) do not get that chart warning.
-- Existing starter-estimate help text was left in place. Values stay editable.
+- Electrical Klein: *✓ Verified manufacturer chart — Klein Tools — Conduit Bending Basics*
+- Electrical/plumbing custom or unverified: *⚠ Company Custom / Unverified* or *Chart not verified for this material/manufacturer — enter company value.*
+- HVAC: *Unverified default — confirm against your manufacturer/company chart.* Generated multipliers are labeled UNVERIFIED, not SMACNA.
+- Framing opening heights: *Job assumption — edit to match plans.*
+- Company-custom numbers stay editable and are not labeled verified.
 
 ---
 

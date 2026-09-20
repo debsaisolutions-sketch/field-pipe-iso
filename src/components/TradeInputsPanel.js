@@ -166,6 +166,24 @@ export default function TradeInputsPanel({ takeoffType, inputs, onChange }) {
               onChange={(e) => set("windowWidth", e.target.value)}
             />
           </Field>
+          <Field label="Door opening height (ft)">
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={inputs.doorOpeningHeight}
+              onChange={(e) => set("doorOpeningHeight", e.target.value)}
+            />
+          </Field>
+          <Field label="Window opening height (ft)">
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={inputs.windowOpeningHeight}
+              onChange={(e) => set("windowOpeningHeight", e.target.value)}
+            />
+          </Field>
         </div>
         <label className={styles.categoryOption}>
           <input
@@ -175,9 +193,8 @@ export default function TradeInputsPanel({ takeoffType, inputs, onChange }) {
           />
           Include sheathing estimate (4x8 sheets)
         </label>
-        <p className={styles.unverifiedDefaultNote} role="note">
-          Sheathing opening heights (7 ft door / 4 ft window) are built-in and unverified — not
-          shown as editable fields.
+        <p className={styles.helperNote} role="note">
+          Job assumption — edit to match plans. Opening heights are used for sheathing area only.
         </p>
       </section>
     );

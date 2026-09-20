@@ -238,6 +238,28 @@
   border-left: 3px solid #8aa0a2;
 }
 
+.verifiedChartNote {
+  margin: 0.45rem 0 0.75rem;
+  padding: 0.4rem 0.65rem;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  color: #1f3d32;
+  background: #eef6f1;
+  border-left: 3px solid #3d7a5c;
+}
+
+.chartSelectorBlock {
+  display: grid;
+  gap: 0.65rem;
+  margin: 0.65rem 0 0.35rem;
+}
+
+.takeoffCellVerified {
+  background: #eef6f1;
+  color: #1f3d32;
+  font-weight: 600;
+}
+
 .categoryRow {
   display: flex;
   flex-wrap: wrap;

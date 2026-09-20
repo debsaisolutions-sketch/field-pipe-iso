@@ -2,6 +2,7 @@ import { EMPTY_FITTING_COUNTS, emptyFittingCounts } from "./constants";
 import { getPreset } from "./takeoffPresets";
 import { createDefaultTradeInputs } from "./tradeCalcs";
 import { normalizeTakeoffType } from "./takeoffTypes";
+import { inferChartSelectionFromStoredTables, normalizeChartSelection } from "./charts/resolveTakeoffChart";
 
 export function createEmptyJobMeta() {
   return {
@@ -66,6 +67,7 @@ export function buildJobSnapshot(state) {
     categories,
     tradeInputs,
     conduitType,
+    chartSelection,
   } = state;
   const now = new Date().toISOString();
   const resolvedType = normalizeTakeoffType(takeoffType);
@@ -97,6 +99,7 @@ export function buildJobSnapshot(state) {
       categories: categories || {},
       trade_inputs: tradeInputs || createDefaultTradeInputs(),
       conduit_type: conduitType || "EMT",
+      chart_selection: normalizeChartSelection(chartSelection, { conduitType }),
     },
     drawing_settings: {
       rotateTurns,
@@ -147,6 +150,12 @@ export function snapshotToEditorState(row) {
       ...(calc.trade_inputs && typeof calc.trade_inputs === "object" ? calc.trade_inputs : {}),
     },
     conduitType: calc.conduit_type || "EMT",
+    chartSelection: calc.chart_selection
+      ? normalizeChartSelection(calc.chart_selection, { conduitType: calc.conduit_type })
+      : inferChartSelectionFromStoredTables(
+          { [takeoffType]: row.takeoff_snapshot },
+          calc.conduit_type
+        ),
     pipeSize: row.pipe_size || preset.defaultSize || '2"',
     segments:
       Array.isArray(row.segments) && row.segments.length > 0

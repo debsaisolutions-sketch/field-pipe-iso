@@ -31,6 +31,8 @@ export function createDefaultTradeInputs() {
     extraStudsPerWindow: "4",
     doorWidth: "3",
     windowWidth: "3",
+    doorOpeningHeight: "7",
+    windowOpeningHeight: "4",
     framingWastePct: "10",
     includeSheathing: false,
     drywallWidth: "12",
@@ -113,11 +115,11 @@ export function calculateFraming(inputs) {
     doors * nonNegative(inputs.doorWidth) + windows * nonNegative(inputs.windowWidth)
   );
 
-  // Unverified hidden defaults (not editable in the form): door height 7 ft, window height 4 ft.
-  // Used only for optional sheathing area, not stud counts.
+  const doorHeightFt = nonNegative(inputs.doorOpeningHeight) || 7;
+  const windowHeightFt = nonNegative(inputs.windowOpeningHeight) || 4;
   const openingArea =
-    doors * nonNegative(inputs.doorWidth) * Math.min(wallHeightFt, 7) +
-    windows * nonNegative(inputs.windowWidth) * 4;
+    doors * nonNegative(inputs.doorWidth) * Math.min(wallHeightFt, doorHeightFt) +
+    windows * nonNegative(inputs.windowWidth) * windowHeightFt;
   const wallArea = Math.max(wallLengthFt * wallHeightFt - openingArea, 0);
   const sheathingSf = inputs.includeSheathing ? finiteOrZero(wallArea * (1 + waste)) : 0;
   const sheathingSheets = inputs.includeSheathing ? Math.ceil(sheathingSf / 32) : 0;
@@ -129,7 +131,7 @@ export function calculateFraming(inputs) {
     `Waste ${nonNegative(inputs.framingWastePct)}% applied to stud count and plate footage.`,
     `Headers use typical widths (${nonNegative(inputs.doorWidth)} ft doors, ${nonNegative(inputs.windowWidth)} ft windows).`,
     inputs.includeSheathing
-      ? "Sheathing uses 4x8 (32 sf) sheets after subtracting a simplified opening area."
+      ? `Sheathing uses 4x8 (32 sf) sheets. Opening heights are job assumptions (${doorHeightFt} ft doors, ${windowHeightFt} ft windows).`
       : "Sheathing omitted unless enabled.",
   ];
 

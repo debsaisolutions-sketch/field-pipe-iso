@@ -264,8 +264,8 @@ test("verification inventory does not promote unverified chart cells", () => {
   assert.ok(summary.counts[VERIFICATION_STATUS.UNVERIFIED] > 100);
   assert.equal(usesUnverifiedNumericDefaults("pipe"), false);
   assert.equal(usesUnverifiedNumericDefaults("hvac"), true);
-  assert.equal(usesUnverifiedNumericDefaults("electrical"), true);
-  assert.equal(usesUnverifiedNumericDefaults("plumbing"), true);
+  assert.equal(usesUnverifiedNumericDefaults("electrical"), false);
+  assert.equal(usesUnverifiedNumericDefaults("plumbing"), false);
 
   const pipe90 = rows.find(
     (r) => r.trade === "Pipe / Welding" && r.size === '2"' && r.item === "90° elbow"
@@ -273,13 +273,29 @@ test("verification inventory does not promote unverified chart cells", () => {
   assert.equal(pipe90.status, VERIFICATION_STATUS.VERIFIED);
 
   const elec90 = rows.find(
-    (r) => r.trade === "Electrical" && r.size === '1"' && r.item === "90 bend"
+    (r) =>
+      r.trade === "Electrical" &&
+      r.size === '1"' &&
+      r.item === "90 bend" &&
+      String(r.system).includes("EMT")
   );
-  assert.equal(elec90.status, VERIFICATION_STATUS.UNVERIFIED);
+  assert.equal(elec90.status, VERIFICATION_STATUS.VERIFIED);
+  assert.equal(elec90.currentValue, 8);
 
-  const hiddenDoor = rows.find((r) => r.item === "Door opening height used in sheathing");
-  assert.equal(hiddenDoor.status, VERIFICATION_STATUS.UNVERIFIED);
-  assert.equal(hiddenDoor.editable, false);
+  const elec45 = rows.find(
+    (r) => r.trade === "Electrical" && r.size === '1"' && r.item === "45 bend"
+  );
+  assert.equal(elec45.status, VERIFICATION_STATUS.UNVERIFIED);
+
+  const doorHeight = rows.find((r) => r.item === "Door opening height used in sheathing");
+  assert.equal(doorHeight.status, VERIFICATION_STATUS.COMPANY);
+  assert.equal(doorHeight.editable, true);
+
+  const plum90 = rows.find(
+    (r) => r.trade === "Plumbing" && r.size === '2"' && r.item === "90 elbow"
+  );
+  assert.equal(plum90.status, VERIFICATION_STATUS.UNVERIFIED);
+  assert.equal(plum90.currentValue, 0);
 });
 
 test("writes the takeoff verification audit markdown from the live inventory", async () => {
@@ -289,7 +305,6 @@ test("writes the takeoff verification audit markdown from the live inventory", a
   assert.match(result.dest, /takeoff-number-verification-audit\.md$/);
   const fs = await import("node:fs");
   const body = fs.readFileSync(result.dest, "utf8");
-  assert.match(body, /Verification Status/);
-  assert.match(body, /UNVERIFIED/);
-  assert.match(body, /Pipe \/ Welding/);
+  assert.match(body, /Klein Hand Bender/);
+  assert.match(body, /Chart not verified for this material\/manufacturer/);
 });
